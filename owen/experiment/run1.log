@@ -1,0 +1,53 @@
+device: cuda | torch 2.13.0+cu130
+DATA_DIR: ../data-slayer-4 | CACHE_DIR: .\cache\puzzle
+train videos 416 | subjects 26 | test sequences 1515
+behaviors: ['Checking_Smartwatch', 'Looking_Around', 'Looking_Under_the_Desk', 'Reading_Hidden_Notes', 'Repeated_Peeking', 'Thinking', 'Using_Smartwatch', 'Writing_Answers']
+test videos: 96 | seconds per video: 14-19 | covered 1515/1515
+window features: (6456, 131) (1515, 131)
+video features: (416, 418) (96, 418)
+angle CV accuracy: [1. 1. 1. 1. 1.]
+{'side': 48, 'front': 48}
+videos per group: {'front_0': 8, 'front_1': 8, 'front_2': 8, 'front_3': 8, 'front_4': 8, 'front_5': 8, 'side_0': 8, 'side_1': 8, 'side_2': 8, 'side_3': 8, 'side_4': 8, 'side_5': 8}
+train pairing accuracy within subject: 208/208 | corr same take 0.830 vs other 0.372
+front-group x side-group mean paired corr:
+          side_0  side_1  side_2  side_3  side_4  side_5
+front_0    0.52    0.53    0.51    0.71    0.53    0.57
+front_1    0.54    0.80    0.52    0.52    0.58    0.56
+front_2    0.56    0.59    0.56    0.54    0.57    0.84
+front_3    0.59    0.53    0.77    0.52    0.60    0.57
+front_4    0.52    0.52    0.48    0.47    0.81    0.52
+front_5    0.82    0.54    0.52    0.47    0.54    0.54
+test takes: 48 | subjects: 6 | paired corr median 0.826, min 0.401
+fold 0 done
+fold 1 done
+fold 2 done
+fold 3 done
+fold 4 done
+        thr  angle_hung  take_hung
+lr   0.8688      0.9470     0.9422
+lgb  0.8708      0.9275     0.9232
+win  0.8105      0.8841     0.8848
+ens  0.8661      0.9229     0.9232
+take_hung accuracy per behavior x angle:
+ angle                   front   side
+behavior                            
+Checking_Smartwatch     0.923  0.923
+Looking_Around          0.846  0.846
+Looking_Under_the_Desk  1.000  1.000
+Reading_Hidden_Notes    0.923  0.923
+Repeated_Peeking        0.846  0.846
+Thinking                1.000  1.000
+Using_Smartwatch        0.923  0.923
+Writing_Answers         0.923  0.923
+subjects with errors: {1: 0.75, 4: 0.75, 6: 0.75, 10: 0.5, 21: 0.75, 22: 0.75, 25: 0.75}
+thr         cheat share (videos): 0.510
+angle_hung  cheat share (videos): 0.500
+take_hung   cheat share (videos): 0.500
+agreement take_hung vs angle_hung: 0.917 | take_hung vs thr: 0.906
+  T0 argmax: ['Looking_Un', 'Using_Smar', 'Reading_Hi', 'Repeated_P', 'Repeated_P', 'Checking_S', 'Thinking', 'Writing_An']
+  T1 argmax: ['Repeated_P', 'Looking_Ar', 'Thinking', 'Writing_An', 'Reading_Hi', 'Checking_S', 'Using_Smar', 'Looking_Un']
+  T2 argmax: ['Repeated_P', 'Looking_Ar', 'Reading_Hi', 'Writing_An', 'Writing_An', 'Looking_Un', 'Writing_An', 'Thinking']
+  T3 argmax: ['Looking_Ar', 'Repeated_P', 'Looking_Un', 'Reading_Hi', 'Looking_Ar', 'Using_Smar', 'Writing_An', 'Reading_Hi']
+  T4 argmax: ['Checking_S', 'Reading_Hi', 'Thinking', 'Repeated_P', 'Looking_Ar', 'Using_Smar', 'Looking_Un', 'Checking_S']
+  T5 argmax: ['Checking_S', 'Using_Smar', 'Looking_Ar', 'Thinking', 'Looking_Ar', 'Looking_Un', 'Reading_Hi', 'Writing_An']
+{1: 766, 0: 749}
