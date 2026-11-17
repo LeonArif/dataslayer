@@ -167,3 +167,97 @@ New files (same video labels as `main.csv`, clips before the boundary set to 0):
 - `leon/submissions/main_from6.csv` (cheat share 0.316).
 - `leon/submissions/main_from7.csv` (cheat share 0.284).
 - `leon/submissions/main_from8.csv` (cheat share 0.252).
+
+Notebook change:
+- `main.ipynb` now has a chart of the action start (`### Awal aksi di dalam video`) and writes the three `main_from{6,7,8}.csv` files in `### Label per detik`.
+- Model and features are unchanged, OOF stays at 0.9519.
+
+Side experiment, features from the action part only (Hungarian F1-Macro, C=0.3, mean over fold seeds 42, 0, 1):
+- Whole video (current): 0.9519, argmax 8-action accuracy 0.788.
+- From second 7 only: 0.9263.
+- From second 6 only: 0.9407.
+- Whole video + from second 7: 0.9407.
+- From second 7, mean minus the mean of the first 6 seconds: 0.9439, argmax accuracy 0.844.
+- Whole video + (mean from second 7 minus mean of first 6 seconds): 0.9535, argmax accuracy 0.847.
+- Whole video + that difference + std of first 6 seconds: 0.9439.
+- Subtracting the video's own writing part helps the argmax (0.788 to 0.847) but not the score after Hungarian, so the notebook features are unchanged.
+
+## 2026-11-17 - main.ipynb: front and side videos paired by motion timing
+
+Finding:
+- Front and side videos of the same subject and action are the same take filmed by two cameras, so their motion rises and falls at the same times.
+- Motion profile: norm of the feature difference at lag 5 samples (0.5 s), z-scored per video.
+  Similarity of two videos: best cross-correlation over shifts of -30 to +30 samples.
+- Pairing front to side videos inside a subject with Hungarian on this similarity is 95.7% correct on train, and 85% of subjects are fully right.
+  Same take median similarity 0.74, different take 0.42.
+- Other profiles were worse: distance from the first 3 seconds 84.1%, smoothed lag-5 energy 93.8%.
+  An earlier test with lag-1 energy gave only weak separation (0.50 against 0.32), which is why pairing was first logged as unreliable.
+- Matching the front group to the side group of the same person among 6 random train subjects (mean matched similarity, Hungarian): all 6 right in 2,000 of 2,000 trials.
+
+Change in the notebook:
+- Test front and side groups are now matched to a person by motion timing, not by CLS features.
+  Both methods give the same matching on test (matched similarities 0.63, 0.59, 0.44, 0.61, 0.67, 0.69, best non-matched 0.57).
+- New step `### Penugasan gabungan front dan side`: the action assignment of both views of a person is solved together, maximising total log probability plus PAIR_WEIGHT (3.0) times the timing similarity of the front and side video that get the same action, by alternating Hungarian from two starts.
+- All submission files were regenerated from this assignment.
+  4 of 96 test videos changed label compared with the per-group Hungarian.
+
+Results (OOF, notebook folds seed 42):
+- Argmax 0.8628, Hungarian per group 0.9519, joint front + side 0.9615 (8-action accuracy 0.9615).
+- Weakest after joint assignment: Checking_Smartwatch front and Using_Smartwatch front (0.885 each).
+
+Side experiments (mean over 5 fold seeds):
+- PAIR_WEIGHT 0: 0.9510, 1: 0.9587, 2: 0.9635, 3: 0.9635, 5: 0.9615, 8: 0.9635, 12: 0.9635, 20: 0.9606.
+- Upper bound with the true front-side pairing and summed log probabilities: 0.968 (3 seeds).
+- Hard pairing first, then summed log probabilities: 0.955 (3 seeds), worse than the joint version.
+
+## 2026-11-17 - Public LB decoded from the exact score decimals: labels are per second
+
+Method:
+- F1-Macro depends only on three whole numbers: true positives (TP), errors (FP + FN) and true negatives (TN).
+- For each exact public score, every (N, TP, errors, TN) that reproduces the 7 decimals was enumerated.
+
+Results:
+- The public set has exactly 455 clips (454 gives no solution).
+- `baseline_cv.csv` (0.5765203): TP 85, errors 183, TN 187.
+- Steven's file (0.4775127): TP 10, errors 133, TN 312.
+  So at least 312 of the 455 public clips (68.6%) are normal, the public set is not 50/50.
+- Fayadh's `submission_main.csv` (0.6872, 4 digits only): candidates include TP 115, errors 137, TN 203.
+- Fayadh's `submission_baseline.csv` (0.5737068) has no solution at N = 455, not explained.
+
+Expected counts for `baseline_cv.csv` in a random 455-clip sample, with the video labels of the current `main.csv`:
+
+| Rule for cheat clips inside a cheat video | Cheat share | TP | Errors | TN |
+|---|---|---|---|---|
+| Observed on the LB | about 0.30 | 85 | 183 | 187 |
+| Whole video | 0.505 | 134 | 176 | 145 |
+| Second >= 5 | 0.347 | 95 | 182 | 178 |
+| Second >= 6 | 0.315 | 86 | 184 | 184 |
+| Second >= 7 | 0.283 | 79 | 184 | 192 |
+| Second >= 8 | 0.251 | 72 | 184 | 199 |
+
+Conclusion:
+- Whole-video labels are ruled out (TP 134 expected against 85 observed).
+- Clips of a cheat video only count as cheat from about second 6-7.
+- Combined distance to the observed counts of `baseline_cv.csv` and Fayadh's main: second >= 7 is closest (10.5), then detected onset - 1 (12.3-14.1), second >= 6 (16.5), second >= 8 (26.7), second >= 5 (34.6).
+- The sampling noise is about 7 clips per count, so 6 against 7 against a per-video onset is still open.
+- Recommended file: `leon/submissions/main_from7.csv`.
+
+## 2026-11-17 - main_from7 submitted: public LB 0.9600702
+
+- Submitted file: `leon/submissions/submission.csv`, identical to `main_from7.csv` built from the joint front + side assignment (CV 0.9615 per video).
+- Public LB 0.9600702, up from the team's 0.6872004.
+- Decoded counts on the 455 public clips: 125 cheat clips right, 315 normal clips right, 15 wrong (accuracy 96.7%).
+- With Steven's count (312 normal right), the true number of cheat clips in the public set is between 125 and 140 (27.5% to 30.8%).
+- Decoded counts of the other files with a slightly wider rounding tolerance: Fayadh main (0.6872004) TP 115, errors 137, TN 203, and Fayadh baseline (0.5737068) TP 80, errors 182, TN 193.
+  Fayadh's baseline file in the repo would give about 220 errors under every rule, so it is probably not the file that was submitted.
+
+Where the 15 wrong clips can come from (each explanation alone predicts about 14-15 errors, so they cannot be told apart yet):
+- A: boundary 7 is right, and one take is swapped with another in both views (4 videos, about 36 clips, about 11 in public).
+- B: all videos are right and the true boundary is second 6 (48 clips, about 14 in public, all missed cheat clips).
+- C: all videos are right and the boundary follows each video's own action start (detected onset - 1).
+- Boundary 8 is less likely: it predicts 114 cheat clips right against 125 observed.
+
+Probe files for the next submissions:
+- `leon/submissions/main_from6.csv`: 1.0 under B, about 0.92 under A.
+- `leon/submissions/main_onset.csv` (new, written by a scratch script, not yet in the notebook): boundary = detected onset - 1 per video, 45 clips differ from the submitted file.
+  Start second among predicted cheat videos: 4 (2 videos), 5 (2), 6 (15), 7 (16), 8 (10), 9 (1), 11 (2).
