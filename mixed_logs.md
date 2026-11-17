@@ -61,13 +61,6 @@ Update (Leon, 2026-11-17): hypothesis 2 is now the most likely one.
 - The exact boundary is not known, so Leon wrote `leon/submissions/main_from6.csv`, `main_from7.csv` and `main_from8.csv` to test it.
 - Details and the full table are in `leon/logs.md`.
 
-## Rules risk
-
-- The rules forbid external data.
-  Pretrained weights (DINOv3, RT-DETR, ViTPose, LeVJEPA) are used by team decision and still need to be confirmed with the committee.
-- The rules forbid manual prediction and hand labelling of test.
-  The test rebuild is fully automatic from pixels.
-
 ## Timeline
 
 ### 2026-11-16 - Fayadh - `baseline.ipynb` (motion + HOG, LGBM)

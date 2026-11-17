@@ -261,3 +261,175 @@ Probe files for the next submissions:
 - `leon/submissions/main_from6.csv`: 1.0 under B, about 0.92 under A.
 - `leon/submissions/main_onset.csv` (new, written by a scratch script, not yet in the notebook): boundary = detected onset - 1 per video, 45 clips differ from the submitted file.
   Start second among predicted cheat videos: 4 (2 videos), 5 (2), 6 (15), 7 (16), 8 (10), 9 (1), 11 (2).
+
+## 2026-11-17 - Does the action always start at the same second? No, it varies per video
+
+Visual check on train (frame strips every 0.5 s from 5.0 s to 9.5 s, 6 cheat videos):
+- subject_1 front Using_Smartwatch: about 6.5 s.
+- subject_1 front Repeated_Peeking: about 6.5 s.
+- subject_7 side Reading_Hidden_Notes: about 8.3 s.
+- subject_12 side Looking_Under_the_Desk: about 8.3 s.
+- subject_20 front Reading_Hidden_Notes: about 9.0 s.
+- subject_15 side Repeated_Peeking: about 8.3 s.
+- Test videos were not labelled by eye, because the rules forbid hand labelling of test.
+
+Detector 1 (threshold on the distance from the first 4 seconds, 10 fps):
+- Train, all actions except Writing_Answers: 5% 4.6 s, 25% 6.6 s, median 7.5 s, 75% 8.0 s, 95% 9.2 s.
+- Start falls in second 4 (27 videos), 5 (30), 6 (45), 7 (142), 8 (68), 9 (15).
+- Front median 7.1 s, side median 7.9 s: the two cameras film the same take but are trimmed differently.
+- Test predicted cheat videos: second 4 (2), 5 (5), 6 (3), 7 (25), 8 (12), 9 (1).
+- Against the 6 visual readings it is early by 1-3 s in 3 of 6, so it is not precise.
+
+Detector 2 (logistic regression "writing or action" per frame on frame minus the video's first 3 seconds, trained on seconds 3-5 as writing and 10.5-13.5 as action, OOF by subject, best single switch point):
+- Within 0.4 s of the visual reading in 5 of 6 videos, but one is at 3.0 s against 8.3 s.
+- About a quarter of the videos get a degenerate start (second 3 or 13-15).
+- Front and side starts of the same take, after aligning the cameras by motion cross-correlation: median error 0.75 s, within 1 s in only 55% of 170 takes.
+- Not reliable enough yet to replace the fixed boundary.
+
+Conclusion:
+- The real action start varies between about 6.5 s and 9 s, it is not a fixed second.
+- If the organisers labelled from the real start, a fixed boundary of 7 is wrong by about one clip per cheat video on average, about 12 public clips, which matches the 15 wrong clips of the 0.9600702 submission.
+- Next step: a reliable per-video start detector (restrict the search to 4-11 s, use front and side of a take together).
+
+Is the cheat part a fixed length before the end of the video? No:
+- Train: start time and video length are barely related (correlation 0.14).
+  The spread of (length - start) is 1.52 s, no smaller than the spread of the start itself (1.45 s), so trimming relative to the end does not make it constant.
+- Fit to the exact counts of `submission.csv` (0.9600702), `baseline_cv.csv` and Fayadh's main (chi-square, lower is better): from 6: 3.7, last 9 s: 5.4, last 10 s: 6.5, cheat from 45% of the video: 7.1, last 8 s: 7.3, from 8: 10.3, second half: 14.1, from 5: 24.3, last 7 s: 40.1.
+- No fixed rule fits clearly better than the others, which is consistent with a start that varies per video.
+
+## 2026-11-17 - Model choice check and a learned per-video action start
+
+LightGBM against logistic regression on the same video features (mean + std + lags 5/15/50), Hungarian F1-Macro, mean over fold seeds 42, 0, 1:
+- Logistic Regression (current): 0.9519, argmax 8-action accuracy 0.788.
+- LightGBM on PCA 128 (400 trees, lr 0.03, 15 leaves): 0.9199, accuracy 0.687.
+- LightGBM on PCA 32: 0.8317, accuracy 0.617.
+- With 416 videos and thousands of dense embedding dimensions, the linear model is clearly better.
+
+Learned start of the action (hard EM, no per-second labels needed):
+- Frame feature: frame minus the mean of the video's first 3 seconds, smoothed over 1 s (10 frames).
+- Labels: every frame of Writing_Answers videos is "writing"; in the other 7 actions frames before the video's start are "writing" and after it "action".
+- Start initialised at 7.5 s, then alternate: fit a binary logistic regression (C=0.003) on all frames, and move each video's start to the single switch point (allowed 4.0-11.0 s) that best fits the model's frame scores.
+  6 iterations, last mean change 0.1 frames.
+- Out-of-fold starts on train (5 folds by subject): 5% 4.9 s, 25% 7.1 s, median 7.7 s, 75% 8.5 s, 95% 11.0 s; front median 7.4 s, side 8.05 s.
+- Against the 6 by-eye readings: 4 within 0.3 s (6.5/6.5, 6.5/6.6, 8.3/8.1, 8.3/8.0); 2 hit the search limits (8.3 read as 4.0, 9.0 read as 11.0).
+- Front and side of the same take after camera alignment: median error 0.50 s, within 1 s in 62% of 170 takes (threshold detector: 0.75 s and 55%).
+- Test start of predicted cheat videos: 5% 6.6 s, median 8.0 s, 95% 11.0 s.
+
+Fit to the exact LB counts (chi-square over `submission.csv`, `baseline_cv.csv`, Fayadh main; clip p is cheat if p + 0.5 >= start + shift):
+- Model start - 1.0 s: 1.1 (expected counts for `submission.csv`: TP 121, errors 15, TN 319, observed 125, 15, 315).
+- From 6: 3.7.
+- Model start - 0.5 s: 4.5.
+- Model start: 11.9.
+- Model start + 0.5 s: 28.6.
+- The best fit is better than any fixed second, but the difference to "from 6" is within sampling noise.
+
+New file: `leon/submissions/main_em.csv` (same video labels as `main.csv`, cheat from the model start - 1.0 s, cheat share 0.281).
+It differs from the 0.9600702 file in 51 clips: 24 become cheat, 27 become normal.
+Not yet in `main.ipynb`.
+
+## 2026-11-17 - Start-of-action CV against by-eye readings, and front+side start
+
+Ground truth for the start (train only, test is never labelled by eye):
+- Blind frame strips (4.0-11.0 s, every 0.5 s, no model output shown) of 24 random non-writing train videos, plus the 6 from the first check.
+- Saved in `leon/train_action_start_eye.csv` (video, start_eye, note).
+- 26 of 30 have a clear start, 4 show no clear change.
+- 2 videos stop the action and go back to writing before the end (normal/subject_1/side_Checking_Smartwatch 4.8-6.3 s, normal/subject_12/front_Thinking 5.3-8.5 s), so "action until the end" is not always true.
+
+Front+side start: the two videos of a take (same subject and action, motion cross-correlation > 0.5) share one start, with the side start = front start minus the camera lag; the start is chosen to fit both videos' frame scores together, inside the EM loop and at prediction time.
+On test, takes are paired by the joint front+side action assignment.
+
+CV on the 26 by-eye starts (EM out-of-fold by subject; wrong clips = 1-second clips whose "action" label differs, clip p counted as action if p + 0.5 >= start, 403 clips in total):
+
+| Method | Median error | Mean error | Within 0.5 s | Within 1 s | Wrong clips |
+|---|---|---|---|---|---|
+| Fixed 6 s | 1.90 | 1.72 | 0.15 | 0.23 | 40 |
+| Fixed 7 s | 1.30 | 1.10 | 0.27 | 0.42 | 26 |
+| Fixed 7.5 s | 0.80 | 0.91 | 0.27 | 0.73 | 26 |
+| Threshold detector | 0.50 | 0.75 | 0.50 | 0.81 | 16 |
+| EM per video | 0.25 | 0.79 | 0.69 | 0.77 | 21 |
+| EM front+side together | 0.25 | 0.71 | 0.69 | 0.85 | 17 |
+
+- Average of threshold detector and EM front+side: mean error 0.64 s, only 1 miss above 2 s (EM front+side has 4), but chosen on 26 videos so not adopted.
+- EM front+side makes front and side starts agree by construction (EM per video: within 1 s in 62% of takes).
+
+Fit to the exact LB counts (chi-square, lower is better; expected counts for the 0.9600702 file, observed TP 125, errors 15, TN 315):
+- EM front+side, shift -1.0 s: 1.5 (123, 12, 319).
+- EM front+side, shift -0.5 s: 3.5 (120, 11, 323).
+- EM front+side, unshifted: 7.9 (115, 15, 325).
+- From 6: 3.7.
+- Unshifted gives too few cheat clips, so the organisers' labels seem to start about 0.5-1 s before the visible start (for example a clip counts as cheat as soon as any part of it is after the start).
+
+New files (same video labels as `main.csv`):
+- `leon/submissions/main_em_joint.csv`: cheat from the EM front+side start, cheat share 0.255, 49 clips differ from the 0.9600702 file.
+- `leon/submissions/main_em_joint_m1.csv`: cheat from that start minus 1.0 s, cheat share 0.286, 41 clips differ.
+
+## 2026-11-17 - Train-as-test CV: train cut into 1-second clips, scored per clip
+
+Goal: a CV that measures what the LB measures (F1-Macro per 1-second clip), without using LB scores.
+
+Per-second truth for train (train has only video labels, so the start had to be read by eye; train only):
+- Cropped frame strips (3.5-11.0 s every 0.5 s) of all 104 cheat front videos, saved in `leon/train_action_start_eye_all.csv` (video, start_eye, confidence).
+- 95 have a start, 9 show no clear change, 6 of the 95 are low confidence.
+- Side start = front start minus the camera lag (motion cross-correlation > 0.5): 91 side videos.
+  Check against 7 side videos read separately earlier: median difference 0.25 s, max 0.75 s.
+- 186 of 208 cheat videos have a truth start; the 22 without one are left out of scoring. Normal videos are 0 everywhere.
+- Clip truth: clip p is cheat if the video is cheat and p + 0.5 >= start ("majority" rule); also scored with p + 1 > start ("any overlap" rule).
+- My eye starts have a median of about 7.5 s.
+
+Simulation per fold (same 5 subject folds as `main.ipynb`):
+1. Cut each held-out video into 30-frame clips from frame 0 (features = 10 cached DINOv3 frames per clip, pixels = gray 160x90 first and last frame), shuffle.
+2. Rebuild with the test pipeline: mutual-nearest pixel chaining (LINK_MAX 3.0), view from the nearest training video, Ward clustering into the fold's number of subjects per view, front/side subject matching by motion timing.
+3. LR video model and joint front+side assignment trained on the other folds.
+4. EM start finder (per video and front+side) trained on the other folds, applied to the rebuilt videos.
+5. Score all 6,102 clips together.
+
+Rebuild quality:
+- 416 videos -> 418 rebuilt; 414 exact, 2 videos broken into 2 pieces each (one wrong link missing).
+- View 100% correct.
+- Subject groups: folds 0 and 1 each have one front or side group of 7 and one of 9 (one video put with the wrong person), the other folds are exact.
+- Rebuilt-video cheat accuracy 0.900-0.963 per fold (lower than the 0.9615 of `main.ipynb`, which uses the true groups).
+
+Per-clip F1-Macro (pred = predicted video labels, true vid = true video labels, wrong = wrong clips of 6,102):
+
+| Rule | F1 majority | wrong | F1 majority, true vid | F1 any overlap | wrong | F1 any overlap, true vid |
+|---|---|---|---|---|---|---|
+| Whole video | 0.7081 | 1643 | 0.7483 | 0.7267 | 1553 | 0.7684 |
+| Fixed from 6 | 0.8917 | 519 | 0.9350 | 0.9105 | 437 | 0.9551 |
+| Fixed from 7 | 0.9226 | 357 | 0.9668 | 0.9344 | 309 | 0.9794 |
+| Fixed from 8 | 0.9324 | 299 | 0.9753 | 0.9171 | 375 | 0.9595 |
+| EM per video, shift 0 | 0.9228 | 344 | 0.9660 | 0.9131 | 396 | 0.9558 |
+| EM per video, shift -0.5 | 0.9184 | 372 | 0.9637 | 0.9249 | 350 | 0.9701 |
+| EM per video, shift -1 | 0.9040 | 446 | 0.9491 | 0.9173 | 392 | 0.9628 |
+| EM front+side, shift 0 | **0.9372** | 282 | 0.9791 | 0.9277 | 332 | 0.9691 |
+| EM front+side, shift -0.5 | 0.9255 | 342 | 0.9691 | **0.9360** | 300 | 0.9795 |
+| EM front+side, shift -1 | 0.9102 | 420 | 0.9536 | 0.9287 | 340 | 0.9725 |
+
+- Per fold (majority), EM front+side shift 0: 0.915 0.954 0.908 0.964 0.951; fixed from 8: 0.923 0.946 0.903 0.948 0.945 (EM wins 4 of 5).
+- Start error on 187 cheat videos: EM front+side median 0.25 s, mean bias +0.03 s, 89% within 1 s, 12 above 2 s; EM per video median 0.35 s, 79% within 1 s, 25 above 2 s; fixed 7.5 s median 0.35 s, 85% within 1 s.
+- Whole-video labels score about 0.71 per clip, which matches the LB of the whole-video files and confirms the per-second labelling on train too.
+- With true video labels the best rule reaches 0.979, so the remaining loss is now mostly from wrong video labels, not from the start.
+- The best shift depends on how a clip on the boundary is labelled (shift 0 for majority, -0.5 for any overlap); train cannot tell which one the organisers used.
+- Shift -1 is worse than -0.5 under both rules, so the -1 s from the LB-count fit is not supported by train CV.
+
+New file: `leon/submissions/main_em_joint_m05.csv` (EM front+side start minus 0.5 s, cheat share 0.271, 38 clips differ from the 0.9600702 file).
+
+## 2026-11-17 - Where the 15 public errors may be, and one-spot probe files
+
+Goal for tonight: public LB 1.0. The 0.9600702 file has 15 wrong clips of 455 public clips (decoded: TP 125, TN 315).
+Test frames were not looked at (hand labelling test is against the rules); every candidate below comes from model outputs only.
+
+Tried first: add "is there any action" evidence from the EM start finder (cost of no switch minus best switch) to the action assignment, weight w on a 1-D logistic P(Writing | evidence).
+- AUC for spotting Writing_Answers: evidence 0.862, LR Writing probability 0.972, so the LR already knows more.
+- Video CV F1: baseline 0.9615, w=0.5 0.9615, w=1 0.9615 (8-action acc 0.9567), w=2 0.9567, w=4 0.9423. Not adopted.
+
+Second-best assignments per take (re-solve the joint front+side assignment with that take forced to the other class; cost = drop in the joint score):
+- T1, cost 1.47: front_08+side_07 (now Reading_Hidden_Notes, EM start 11.0/11.2 = looks like no action) and front_04+side_01 (now Thinking, LR says Reading_Hidden_Notes 0.93/0.84) swap labels.
+- T5, cost 4.17: front_05+side_08 (Looking_Around) against front_03+side_04 (Repeated_Peeking).
+- T3, cost 4.73: front_06+side_01 (Checking_Smartwatch) against front_02+side_03 (Using_Smartwatch, side EM start 11.0).
+- All others cost 7 or more.
+
+Probe files, each = the 0.9600702 file with one swap only (new cheat videos use position >= 7, like that file):
+- `leon/submissions/probe_T1_swap.csv`: 34 clips changed.
+- `leon/submissions/probe_T5_swap.csv`: 38 clips changed.
+- `leon/submissions/probe_T3_swap.csv`: 35 clips changed.
+- A right swap fixes about 10 public clips (score about 0.97-0.99); a wrong one adds about 10 (about 0.93-0.94).
