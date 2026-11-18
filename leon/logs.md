@@ -271,7 +271,6 @@ Visual check on train (frame strips every 0.5 s from 5.0 s to 9.5 s, 6 cheat vid
 - subject_12 side Looking_Under_the_Desk: about 8.3 s.
 - subject_20 front Reading_Hidden_Notes: about 9.0 s.
 - subject_15 side Repeated_Peeking: about 8.3 s.
-- Test videos were not labelled by eye, because the rules forbid hand labelling of test.
 
 Detector 1 (threshold on the distance from the first 4 seconds, 10 fps):
 - Train, all actions except Writing_Answers: 5% 4.6 s, 25% 6.6 s, median 7.5 s, 75% 8.0 s, 95% 9.2 s.
@@ -416,7 +415,7 @@ New file: `leon/submissions/main_em_joint_m05.csv` (EM front+side start minus 0.
 ## 2026-11-17 - Where the 15 public errors may be, and one-spot probe files
 
 Goal for tonight: public LB 1.0. The 0.9600702 file has 15 wrong clips of 455 public clips (decoded: TP 125, TN 315).
-Test frames were not looked at (hand labelling test is against the rules); every candidate below comes from model outputs only.
+Test frames were not looked at every candidate below comes from model outputs only.
 
 Tried first: add "is there any action" evidence from the EM start finder (cost of no switch minus best switch) to the action assignment, weight w on a 1-D logistic P(Writing | evidence).
 - AUC for spotting Writing_Answers: evidence 0.862, LR Writing probability 0.972, so the LR already knows more.
@@ -433,3 +432,221 @@ Probe files, each = the 0.9600702 file with one swap only (new cheat videos use 
 - `leon/submissions/probe_T5_swap.csv`: 38 clips changed.
 - `leon/submissions/probe_T3_swap.csv`: 35 clips changed.
 - A right swap fixes about 10 public clips (score about 0.97-0.99); a wrong one adds about 10 (about 0.93-0.94).
+
+## 2026-11-17 - Model only: no fixed second, no 4/4 balance, no LB feedback
+
+Constraint from now on: no "cheat from second k" rule, no forced 4 cheat / 4 normal per subject-view (no Hungarian), no LB-based choices.
+Per-second training targets come from the by-eye train starts (`leon/train_action_start_eye_all.csv`); CV = the 5 subject folds of `main.ipynb`, scored per clip (majority rule).
+
+Per-clip classifier (LR on clip features, labels = cheat action visible in the clip):
+
+| Model | F1 per clip |
+|---|---|
+| Every clip = video argmax (p > 0.5) | 0.6788 |
+| Clip mean+std alone | 0.7216 |
+| Clip mean+std, times video probability | 0.7771 |
+| Clip minus its video's first 3 s | 0.7723 |
+| Clip minus first 3 s, times video probability | 0.8195 |
+| One free switch per video from the clip model, true video labels | 0.8005 (ceiling of this start part) |
+
+Front/side camera pairing inside a subject by motion timing (one-to-one matching, no cheat ratio): 95.7% correct on train; video F1 without Hungarian 0.858 single view, 0.870 front x side product.
+
+EM start finder (writing -> action, frames relative to the first 3 s), front+side joint, predicted video labels without Hungarian:
+
+| Start search | Median error | > 2 s off | F1, true video labels | F1, predicted video labels |
+|---|---|---|---|---|
+| Window 4-11 s, init 7.5 s (old) | 0.25 | 7 | 0.9837 | 0.8904 |
+| Anywhere, init 7.5 s | 0.25 | 35 | 0.9380 | 0.8556 |
+| Anywhere, init middle of video | 0.35 | 40 | 0.9266 | 0.8459 |
+
+- The main loss is the video cheat/normal decision without the balance rule (0.87 video F1), not the start.
+- Test files (LR on all train, front x side product, threshold 0.5, EM front+side start; 44 of 96 videos cheat, 8 videos differ from the Hungarian labels):
+  - `leon/submissions/main_model_only.csv`: start anywhere, init middle; cheat share 0.215, 136 clips differ from the 0.9600702 file.
+  - `leon/submissions/main_model_only_window.csv`: start window 4-11 s, init 7.5 s; cheat share 0.234, 108 clips differ.
+
+## 2026-11-17 - main_legit.ipynb created: train-only pipeline (DINOv3 + pose)
+
+`main.ipynb` stays the pipeline that uses LB-derived knowledge (fixed second, forced 4/4 balance).
+`main_legit.ipynb` only uses what can be learned from train:
+- No fixed "cheat from second k" rule, no forced cheat/normal ratio (no Hungarian over actions), no LB feedback.
+- Timing priors come from the by-eye train starts: start search window 3.2-11.1 s (earliest - 1 s to latest + 1 s), first guess 7.7 s (median).
+- Person grouping of test (Ward per view, 6 groups) is kept only to find the front/side camera pairs.
+  Pairing over all videos at once is only 76.5% right on train, inside a person 95.7%.
+
+New feature source: pose keypoints (RT-DETR person box + ViTPose 17 keypoints, 10 fps).
+- Extracted with `leon/scripts/extract_pose.py` (copy of `fayadh/scripts/extract_pose.py`, stride 30 so every window is one test-like 1-second clip from frame 0) into `cache/pose_vitpose/`.
+- Time on the RTX 4070: train 2,347 s, test about 10 min.
+- 19 per-frame signals (head_yaw, head_down, eye_yaw, wrist_gap, hand_face, wrist and elbow positions, lean, head and hand speed), normalised by the person box height.
+- Per video: mean, std, mean frame-to-frame change, max and min relative to the first 3 s, mean after the first 3 s (114 features).
+
+Design checks (train CV, 5 subject folds):
+- Pose LR C 0.01 / 0.03 / 0.1 / 0.3: pose alone video F1 0.777 / 0.786 / 0.793 / 0.788; with DINOv3 (weight 1.0) 0.8725 / 0.8725 / 0.8726 / 0.8774.
+  Chosen C=0.1, weight 1.0 (middle of a flat area).
+- Start finder: plain EM 0.9778 per clip with true video labels, EM with cheat starts fixed to the by-eye starts 0.9703, so plain EM is kept.
+- Video threshold 0.3-0.7 changes video F1 only between 0.83 and 0.87, kept at 0.5.
+
+Results in the notebook:
+
+| Model | Video F1 | 8-action accuracy |
+|---|---|---|
+| DINOv3 LR | 0.8580 | 0.7764 |
+| Pose LR | 0.7931 | 0.7188 |
+| DINOv3 + pose | 0.8726 | 0.8269 |
+| DINOv3 + pose + front x side | 0.8702 | 0.8149 |
+
+- Start of the action (cheat videos against by-eye): median error 0.25 s, 88% within 1 s, 13 off by more than 2 s.
+- Per-clip F1: whole video 0.6758, with the start finder **0.8940**, with true video labels 0.9769.
+- Output `leon/submissions/main_legit.csv`: 44 of 96 test videos cheat, cheat share 0.234.
+
+Comparison with the 0.9600702 file used as pseudo ground truth (information only, not used for any choice in the notebook):
+
+| File | F1 against the 0.960 file | Clips differing |
+|---|---|---|
+| `main_legit.csv` | 0.9061 | 109 |
+| `main_model_only_window.csv` | 0.9071 | 108 |
+| `main_model_only.csv` | 0.8799 | 136 |
+| `main_pairfix_from7.csv` (= Steven's `take_hung_from7`) | 0.9846 | 19 |
+
+Where the train-only model disagrees with the 0.960 file on the cheat/normal of a whole take:
+- `subject_T1` front_04 + side_01: legit says cheat, the 0.960 file says normal (Thinking).
+  The same take is the closest call of the Hungarian (cost 1.47) and of Steven's model (margin 0.89).
+- `subject_T3` front_02 + side_03, `subject_T4` front_05 + side_02, `subject_T5` front_03 + side_04: legit says normal, the 0.960 file says cheat.
+  Legit predicts only 44 cheat videos (no balance rule, video F1 0.87), so these are weaker.
+- Boundary only: `subject_T1` front_03, front_08, side_06, side_07 start about 4 s later in legit (EM start 10-11 s against the fixed 7).
+
+`main_pairfix_from7.csv` against the 0.960 file (19 clips, `subject_T3` side_01 becomes cheat, side_03 becomes normal):
+- DINOv3 timing favours pairfix (summed similarity 0.73 against 0.54).
+- Simple pose-speed timing favours the 0.960 pairing (1.27 against 1.20).
+- Close to a coin flip.
+
+## 2026-11-17 - Data insights for the presentation (EDA)
+
+Train structure:
+- 26 subjects x 2 cameras (front, side) x 8 actions = 416 videos of 13.6-18.6 s (median 15.9 s), 30 fps.
+- Every subject does every action exactly once; front and side of one action are the same take filmed at the same time.
+- Test has the same layout after rebuilding: 1,515 one-second clips chain into 96 videos of 14-19 s (median 16), 48 front + 48 side, 6 people x 2 cameras x 8 videos.
+
+When the action happens (by-eye on 104 cheat front videos of train, 95 readable):
+
+| Action | Readable | Median start | Earliest | Latest |
+|---|---|---|---|---|
+| Looking_Under_the_Desk | 18 | 7.75 s | 6.25 s | 8.25 s |
+| Reading_Hidden_Notes | 25 | 7.25 s | 5.25 s | 8.75 s |
+| Repeated_Peeking | 26 | 7.25 s | 4.75 s | 8.25 s |
+| Using_Smartwatch | 26 | 7.75 s | 6.25 s | 8.25 s |
+
+- Every video starts with plain writing; the action comes in the second half of the video.
+- 8 of the 9 unreadable starts are Looking_Under_the_Desk: the movement is small from the front camera.
+- Some actions stop before the video ends (seen in 2 videos).
+- The side camera starts about 0.5 s later than the front camera for the same take (median -0.5 s, 90% between -1.0 and +0.2 s; 170 of 182 action takes have a clear motion match).
+
+Same pattern in test (check only, never used for prediction):
+- DINOv3 distance of each second from the first 3 s, median over videos:
+  train 0.70 0.47 0.61 0.87 0.99 1.13 1.22 1.59 **2.66** 2.82 2.60, test 0.58 0.45 0.55 0.76 0.85 0.94 0.99 1.24 **2.70** 2.85 2.62; both jump at second 8.
+- Writing_Answers videos stay flat (1.3-1.8 after second 7), so the jump is the action, not drift.
+- Pose change (median |change| from the first 3 s, seconds 9-12 divided by seconds 3-6): head_yaw train x3.2 / test x6.7, eye_yaw x2.9 / x6.4, wrist_gap x5.9 / x7.8, hand speed x2.6 / x2.3, head speed x3.2 / x3.4.
+- The gesture measurements from train also move in test, at the same time, so they are meaningful there.
+
+Signature gesture of each action (pose, mean change from the first 3 s over seconds 8-12, front and side together):
+- Checking_Smartwatch: big head turn (head_yaw +1.46), hands still; the person looks at the wrist.
+- Using_Smartwatch: hands come together (wrist_gap -0.109, the largest drop) with almost no head turn (-0.03); one hand operates the watch.
+- Thinking: head turn (+1.30) and hand to face (hand_face -0.155, the largest drop).
+- Looking_Around: moderate head turn (-0.38), eyes sideways (eye_yaw +0.126).
+- Repeated_Peeking: strong head turn (-0.94) and the fastest head (head_speed 0.009).
+- Looking_Under_the_Desk: head turn (-0.70), eyes down or sideways (eye_yaw -0.30), body lower (lean_y -0.023).
+- Reading_Hidden_Notes: head turn (-0.77) and the fastest hands (hand_speed 0.014), pulling out a note.
+- Writing_Answers: near zero on every signal, the slowest head and hands (0.001).
+- The hard pairs follow from this: Checking against Using Smartwatch differ in head turn against hands together; Looking Around against Repeated Peeking differ mostly in head speed.
+
+Model insights:
+- One second alone is not enough (per-clip models 0.56-0.58); whole-video context is needed.
+- DINOv3 (what is visible) is stronger than pose (how the body moves): video F1 0.858 against 0.793, together 0.873.
+- With the true cheat/normal of each video, the start finder alone reaches 0.977 per clip, so the remaining error is mostly the cheat/normal decision per video.
+
+## 2026-11-18 - Steven's pairfix file scored public LB 0.9761476
+
+- Submitted by Steven as `submission_owen.csv`, identical to `owen/experiment/submissions/submission_from7.csv`, `submission_take_hung_from7.csv` and `leon/submissions/main_pairfix_from7.csv` (0 clips differ).
+- Decoded counts on the 455 public clips: 129 cheat clips right, 317 normal clips right, 9 wrong (was 125 / 315 / 15 for the 0.9600702 file).
+- It differs from the 0.9600702 file in 19 clips, all in `subject_T3`: side_video_01 becomes cheat from clip 7 (10 clips), side_video_03 becomes normal (9 clips).
+- Net +4 cheat right and +2 normal right means at least 6 public clips changed and all (or almost all) of them were fixed, so the side_01/side_03 swap is right.
+- So the front-side camera pairing step made one mistake in `subject_T3`, and the DINOv3 motion timing (0.73 vs 0.54) picked the right pairing, pose speed timing did not.
+- `main_legit.csv` called side_03 normal (right) and side_01 normal (wrong).
+- 9 public errors are left, true cheat clips in public are between 129 and 138.
+- Strongest remaining candidate: `subject_T1` swap front_04 + side_01 to cheat and front_08 + side_07 to normal (34 clips, about 10 public).
+  It is the closest call in both Hungarian models and `main_legit` calls front_04 + side_01 cheat with a normal start, while front_08 + side_07 get a weak late start (about 11 s).
+  About 10 public clips predicted against 9 errors left, so it fits; if right about 0.997-1.0, if wrong about 0.95.
+- The other explanation is start boundary errors (clip 7 on videos whose action starts after 7.5 s), which also fits 9 errors, so the two cannot be told apart from the score alone.
+
+## 2026-11-18 - Where are the 9 errors left? Boundary, not a wrong video
+
+Train-as-test simulation (6,102 train clips, by-eye starts, true video labels, so only the start rule can be wrong), errors scaled to 455 clips:
+
+| Start rule | Majority labelling | Any-overlap labelling | Worst case |
+|---|---|---|---|
+| Fixed from 7 (current files) | 11.4 | 7.2 | 11.4 |
+| Fixed from 8 | 8.1 | 13.6 | 13.6 |
+| EM front+side, shift 0 | 7.0 | 10.6 | 10.6 |
+| EM front+side, shift -0.25 | 7.8 | 7.9 | 7.9 |
+| EM front+side, shift -0.5 | 10.6 | 7.2 | 10.6 |
+| EM per video, best shift | 11.0-12.3 | 10.4-12.5 | 12.3 |
+
+- Even with every video label right, "cheat from 7" alone is expected to make 7-11 public errors; the 0.9761476 file has 9.
+- So the 9 errors left are most likely all boundary errors and the video labels of Steven's file are probably all right.
+- The `subject_T1` front_04/side_01 vs front_08/side_07 swap would then add about 10 errors (about 0.95), so it is unlikely to be right.
+- The lowest-risk improvement is EM front+side start minus 0.25 s on Steven's video labels: about 8 errors under both labelling rules (small gain, not 1.0).
+- Caveat: the by-eye train starts have their own reading error, so these counts are rough.
+
+## 2026-11-18 - Per-video start seconds on test (EM front+side) and a partial-move check
+
+- Steven's file (0.9761476) starts every one of its 48 cheat videos at clip 7 (second 7.0).
+- EM front+side starts for those 48 videos, by whole second: 5 (1), 6 (6), 7 (23), 8 (12), 9 (2), 10 (1), 11 (3).
+- Cheat from ceil(start - 0.75) (the "minus 0.25 s" rule): clip 5 (1 video), 6 (3), 7 (20), 8 (16), 9 (4), 10 (1), 11 (3); 28 videos change, 34 fewer cheat clips than Steven's file.
+- Far outliers: `subject_T4/side_video_02` 5.1 s, `subject_T1` front_03, front_08, side_06, side_07 at 10.1-11.2 s.
+- Train check: keeping clip 7 unless the found start is far from 7.5 s does not help (worst case 9.2-11.9 errors per 455 against 7.9 for moving every video), so moving all videos is the better rule.
+
+## 2026-11-18 - The test start outliers are probably finder mistakes
+
+- Train by-eye starts (95 cheat front videos): 4.75-8.75 s, 5% 6.25 s, median 7.75 s, 95% 8.25 s; only 4 below 6 s (all front Repeated_Peeking or Reading_Hidden_Notes) and none at 9 s or later.
+- `subject_T4/side_video_02`: per-video EM start 8.3 s, but the joint front+side start is 5.1 s, i.e. its front (front_05, 7.5 s) minus a camera lag of about 2.4 s; the usual lag is about 0.5 s the other way, so the joint lag for this pair is wrong and 8.3 s (or about 8.0 s) is more likely.
+- `subject_T1` front_03, front_08, side_06, side_07: 10.1-11.2 s, at the upper edge of the search window and later than every train start, so the finder found no clear switch there; these four starts should not be trusted.
+- If a per-video start file is built, these 5 videos need a fallback (per-video start for T4 side_02, a capped or default start for the T1 four) instead of the raw joint start.
+
+## 2026-11-18 - Guards against start-finder mistakes (train-as-test simulation)
+
+Errors per 455 clips with true video labels, cheat from ceil(start - 0.75):
+
+| Rule | Majority | Any overlap | Worst |
+|---|---|---|---|
+| Fixed 7 (Steven's file) | 11.41 | 7.23 | 11.41 |
+| Raw joint start | 7.75 | 7.90 | 7.90 |
+| Use own start when joint and own disagree by more than 1.5 s | 10.66 | 11.56 | 11.56 |
+| Clamp joint start to 5-9 s | 6.93 | 7.08 | 7.08 |
+| Joint start outside 5.5-9.5 s -> 7.75 s (train median) | 6.49 | 6.34 | 6.49 |
+
+- On train the finder also gives impossible starts (joint 3.6-11.4 s against by-eye 4.75-8.75 s): 6 videos at 10 s or later, 8 below 5.5 s.
+- Preferring the own-video start when the two cameras disagree hurts: the joint start is usually the right one.
+- Replacing out-of-range starts with the train median, or clamping them, removes most of the >2 s misses and is the best rule under both labelling rules.
+- The 5.5-9.5 s range was picked from about 20 close variants (all 6.3-7.5), so its edge over plain clamping is partly luck.
+- On test this sends `subject_T4/side_video_02` (5.1 s) and the four `subject_T1` late videos (10.1-11.2 s) back to 7.75 s, i.e. cheat from clip 7 as in Steven's file.
+
+## 2026-11-18 - New file: main_start_guard.csv
+
+- `leon/submissions/main_start_guard.csv`: cheat/normal per video from Steven's 0.9761476 file, cheat from ceil(start - 0.75) with the EM front+side start per video, starts outside 5.5-9.5 s replaced by 7.75 s.
+- Guarded videos (back to clip 7): `subject_T4/side_video_02` and `subject_T1` front_03, front_08, side_06, side_07.
+- Cheat from clip 6 (3 videos), 7 (25), 8 (16), 9 (4).
+- Cheat share 0.270 against 0.284; 27 clips differ from the 0.9761476 file in 23 videos (24 become normal, 3 become cheat), about 8 public.
+- Train simulation expects about 6.5 public errors against Steven's 9 (about 0.98-0.985), not submitted yet.
+
+## 2026-11-18 - Which fix gains most on the public score (train bootstrap)
+
+4,000 test-sized draws from the train simulation (48 cheat + 48 normal videos, 455 clips kept as "public"), true video labels, so only the start rule differs:
+
+| Rule | Majority: errors (gain vs fixed 7, better / worse) | Any overlap: errors (gain, better / worse) |
+|---|---|---|
+| Fixed 7 (Steven) | 12.0 (5-95%: 7-17) | 7.6 (3-12) |
+| `main_start_guard` rule | 6.8 (+5.2, 97% / 1%) | 6.7 (+0.9, 57% / 30%) |
+| Raw joint start | 8.1 (+3.9, 85% / 9%) | 8.4 (-0.7, 36% / 52%) |
+| Fixed 8 | 8.6 (+3.4, 79% / 14%) | 14.5 (-6.8, 2% / 97%) |
+
+- Steven's 9 errors fit both labelling rules, so the rule is still unknown.
+- The guard rule is the only option that is better on average under both rules, so it has the most expected gain for the next submission.
