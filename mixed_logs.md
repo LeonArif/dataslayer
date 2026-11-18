@@ -17,8 +17,12 @@ The per-person logs stay the source of truth, this file is the combined view.
 | 11-17 | Leon | `leon/submissions/main_model_only.csv` | Model only: no fixed second, no 4/4 balance | 0.846 (per clip) | not submitted |
 | 11-17 | Leon | `leon/submissions/main_model_only_window.csv` | Same, start search 4-11 s | 0.890 (per clip) | not submitted |
 | 11-17 | Leon | `leon/main_legit.ipynb` / `main_legit.csv` | Train only: DINOv3 + pose LR, no Hungarian, start window from by-eye train starts | 0.873 (video), 0.894 (per clip) | not submitted |
+| 11-18 | Leon | `leon/main_legit.ipynb` / `main_legit.csv` (updated) | Same + per-person centering (each video minus its person-and-camera mean) | 0.942 (video), 0.942 (per clip) | not submitted; 0.945 per clip vs the T1 swap file |
+| 11-18 | Leon | `leon/submissions/main_legit_pair_window.csv` | Same + camera pairing by timing and action agreement + start search 4.25-9.25 s | 0.952 (video), train pairing 100% | not submitted; 0.961 per clip vs the T1 swap file |
+| 11-18 | Leon | `leon/main_legit.ipynb` / `main_legit.csv` (updated) | Centering + action-agreement camera pairing (start search still 3.2-11.1 s) | 0.952 (video), 0.949 (per clip) | not submitted; 0.960 per clip vs the T1 swap file |
 | 11-17 | Steven | `leon/submissions/main_pairfix_from7.csv` (= `take_hung_from7`) | 0.960 file with the `subject_T3` side_01/side_03 pairing swapped | - | **0.9761476** (submitted as `submission_owen.csv`) |
-| 11-18 | Leon | `leon/submissions/main_start_guard.csv` | Steven's video labels, per-video EM front+side start, starts outside 5.5-9.5 s -> 7.75 s | about 6.5 public errors expected (train sim) | not submitted |
+| 11-18 | Leon | `leon/submissions/main_start_guard.csv` | Steven's video labels, per-video EM front+side start, starts outside 5.5-9.5 s -> 7.75 s | about 6.5 public errors expected (train sim) | 0.9626489 (14 wrong, worse than 9) |
+| 11-18 | Leon | `leon/submissions/main_t1swap_from7.csv` | Steven's file + `subject_T1` swap: front_04 + side_01 cheat from 7, front_08 + side_07 normal | - | not submitted |
 
 Video CV = cheat/normal per video; per-clip CV = F1 over 1-second clips against per-second train starts read by eye.
 

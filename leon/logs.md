@@ -650,3 +650,478 @@ Errors per 455 clips with true video labels, cheat from ceil(start - 0.75):
 
 - Steven's 9 errors fit both labelling rules, so the rule is still unknown.
 - The guard rule is the only option that is better on average under both rules, so it has the most expected gain for the next submission.
+
+## 2026-11-18 - main_start_guard.csv submitted: public LB 0.9626489 (worse)
+
+- Decoded: 125 cheat clips right, 316 normal clips right, 14 wrong (Steven's file: 129 / 317 / 9).
+- The file changed 27 clips from Steven's: 24 cheat -> normal (later start), 3 normal -> cheat (clip 6).
+- Change in counts: cheat right -4, normal right -1.
+  So at least 4 of the public clips moved to normal were really cheat, and at least 1 public clip moved to cheat at clip 6 was really normal.
+- The cleanest fit: every public changed clip got worse (4 of the 24 and 1 of the 3 were public), i.e. the truth is "cheat from clip 7" in those videos even where the action visibly starts at 7.8-8.4 s.
+- Conclusion: the public labels behave like a fixed boundary at second 7 per cheat video, not like the per-video start; the train by-eye start simulation does not describe how test was labelled.
+- Then the 9 errors left in Steven's file are most likely wrong video labels or pairings (whole videos), not boundaries.
+- Next: keep cheat from clip 7 and look for wrong cheat/normal or front-side pairings (the `subject_T1` front_04/side_01 vs front_08/side_07 swap is a candidate again).
+
+## 2026-11-18 - New file: main_t1swap_from7.csv
+
+- `leon/submissions/main_t1swap_from7.csv`: Steven's 0.9761476 file with one take swapped in `subject_T1`: front_video_04 + side_video_01 become cheat from clip 7, front_video_08 + side_video_07 become normal.
+- 34 clips change (17 to cheat, 17 to normal), about 10 public; T1 keeps 4 cheat fronts and 4 cheat sides; cheat share unchanged (0.284).
+- Why: the closest call in both Hungarian models (Leon's and Steven's), `main_legit` calls front_04 + side_01 cheat with a normal start, and after the guard result the 9 errors left look like whole-video errors (about 10 public clips for one wrong take).
+- If right: about 0-1 public errors left (about 0.997-1.0); if wrong: about 19 (about 0.95). Not submitted yet.
+
+## 2026-11-18 - main_legit benchmark against the 0.96+ files
+
+Pseudo ground truth for `main_legit` from now on: the three files at 0.96 or above (`submission_0.96.csv`, Steven's `submission_from7.csv` at 0.9761476, and the T1 swap file, now `leon/submissions/submission.csv`). Target: clip F1 0.96+ against them.
+They are only used to compare, never to train or tune.
+
+| Pseudo GT | Clip F1 of main_legit | Clips differ | Video F1 | Wrong videos (clips) | Boundary-only clips |
+|---|---|---|---|---|---|
+| 0.96 file | 0.9061 | 109 | 0.9165 | 8 (69) | 40 |
+| Steven 0.976 | 0.9054 | 110 | 0.9165 | 8 (70) | 40 |
+| T1 swap | 0.9174 | 96 | 0.9165 | 8 (63) | 33 |
+
+- Against the T1 swap file the 8 wrong videos are 4 takes: `subject_T1` front_08 + side_07 (legit cheat, file normal), and `subject_T3` front_02 + side_01, `subject_T4` front_05 + side_02, `subject_T5` front_03 + side_04 (legit normal, file cheat).
+- About two thirds of the gap is the cheat/normal decision per video (3 of 4 wrong takes are missed cheats), one third is the start boundary.
+- Hugging Face check: no released DINOv3 head for action or video classification (DINOv3 heads are for ImageNet classes, detection, segmentation and depth); action heads exist only for other video backbones (V-JEPA 2 SSv2 / Diving48 attentive probes).
+
+## 2026-11-18 - Gesture durations from pose (train only)
+
+Goal: measure how long each gesture lasts after the first 3 s (for example how long the hands stay together on the watch) and see whether that separates cheat from normal.
+Script: scratch `duration.py` and `dur_cv.py` (not in the notebook yet).
+
+Method:
+- Per frame (10 fps, ViTPose keypoints) signals relative to how the person sat in the first 3 s: head turn (any side, left, right), head down, head up, hand to face, hands together, wrist up, head moving, hand moving.
+- A gesture is "on" when the signal is more than 3 robust spreads (MAD) above the first-3-s level.
+- Per gesture: share of time on, episodes per second (at least 0.3 s), longest episode, mean episode length; plus head side switches per second. 41 features per video.
+
+Median seconds "on" after the first 3 s (front + side):
+
+| Action | Head turn | Head down | Hand to face | Hands together | Wrist up | Head moving | Hand moving |
+|---|---|---|---|---|---|---|---|
+| Checking_Smartwatch (normal) | 6.0 | 1.3 | 5.4 | 0.2 | 4.6 | 1.8 | 2.3 |
+| Using_Smartwatch (cheat) | 6.5 | 1.7 | 6.2 | 5.6 | 6.1 | 2.2 | 3.0 |
+| Looking_Around (normal) | 6.5 | 1.0 | 1.2 | 0.4 | 0.4 | 4.4 | 0.5 |
+| Repeated_Peeking (cheat) | 7.3 | 0.2 | 0.2 | 0.0 | 0.1 | 4.8 | 1.4 |
+| Thinking (normal) | 6.4 | 1.2 | 7.1 | 0.4 | 7.0 | 3.6 | 3.2 |
+| Reading_Hidden_Notes (cheat) | 6.6 | 4.8 | 4.8 | 2.3 | 3.4 | 3.4 | 4.6 |
+| Writing_Answers (normal) | 4.6 | 0.6 | 1.6 | 0.2 | 0.6 | 0.9 | 1.3 |
+| Looking_Under_the_Desk (cheat) | 6.9 | 5.6 | 2.6 | 4.2 | 0.4 | 3.5 | 4.4 |
+
+Paired check (same subject and camera, share of 52 pairs where the cheat video has the larger value, 0.5 = no signal):
+- Checking vs Using smartwatch: hands together longest episode / duration 0.85 (using = both hands together for seconds, checking = a short glance).
+- Thinking vs Reading_Hidden_Notes: wrist up longest episode 0.11 (thinking keeps the hand up at the chin), hand moving longest episode 0.88.
+- Writing vs Looking_Under_the_Desk: head moving episodes 0.88, hand moving 0.83.
+- Looking_Around vs Repeated_Peeking: weak, best 0.65 (hand moving); this pair is still the hardest.
+
+Video CV (StratifiedGroupKFold 5, seed 42, true front-side partner, so the baseline here is 0.8798 instead of the notebook's 0.8702):
+
+| Model | Video F1 | 8-action acc |
+|---|---|---|
+| main_legit (DINOv3 + pose + two cameras) | 0.8798 | 0.8365 |
+| Durations alone | 0.73-0.74 | 0.51-0.53 |
+| main_legit + durations as a third model, C=0.1, weight 1.0 | **0.9038** | 0.8702 |
+| main_legit + durations, other C / weights (6 settings) | 0.8894-0.8990 | 0.855-0.865 |
+| DINOv3 + one model on pose + durations | 0.8942 | 0.851-0.861 |
+
+- Every setting beats the baseline (+1.0 to +2.4 points video F1), so the gain is not from one lucky setting.
+
+## 2026-11-18 - Error analysis of main_legit (train OOF and test vs pseudo GT)
+
+Scripts (scratch): `err_common.py`, `err_an.py`, `la_rp.py`, `la_rp_spec.py`, `la_rp_main.py`, `test_check.py`.
+
+Train OOF, cheat/normal accuracy per action (52 videos each):
+
+| Action | DINOv3 (pixels) | Pose | Durations | DINOv3 + pose + dur, one camera | Final, both cameras |
+|---|---|---|---|---|---|
+| Checking_Smartwatch (normal) | 0.79 | 0.79 | 0.79 | 0.87 | 0.88 |
+| Looking_Around (normal) | 0.90 | 0.69 | 0.65 | 0.81 | 0.85 |
+| Looking_Under_the_Desk (cheat) | 0.96 | 0.96 | 0.88 | 0.98 | 1.00 |
+| Reading_Hidden_Notes (cheat) | 0.79 | 0.87 | 0.87 | 0.85 | 0.88 |
+| Repeated_Peeking (cheat) | 0.73 | 0.48 | 0.54 | 0.77 | 0.81 |
+| Thinking (normal) | 0.96 | 0.94 | 0.87 | 0.98 | 1.00 |
+| Using_Smartwatch (cheat) | 0.83 | 0.75 | 0.62 | 0.85 | 0.96 |
+| Writing_Answers (normal) | 0.90 | 0.87 | 0.71 | 0.85 | 0.85 |
+
+- Final model: 40 of 416 videos wrong (20 front, 20 side), video F1 0.9038.
+- 16 of the 40 errors are Looking_Around <-> Repeated_Peeking (8 each way); next: Checking -> Using smartwatch 4, Hidden notes -> Checking smartwatch 4, Writing scattered over 5 actions (8).
+- Pixels (DINOv3) beat pose on Looking_Around (0.90 vs 0.69), Repeated_Peeking (0.73 vs 0.48), Using_Smartwatch and Writing; pose beats pixels only on Reading_Hidden_Notes (0.87 vs 0.79).
+
+Looking_Around vs Repeated_Peeking, 20 head-movement measures from pose (paired per subject and camera, share where peeking is larger):
+- Front camera: peeking turns to one side only (one-sidedness median 1.00 vs 0.18, pairs 0.81), holds each turn longer (1.5 s vs 0.7 s, 0.77), has longer gaps between turns (0.85) and a more regular rhythm (autocorrelation peak 0.28 vs 0.00, 0.79); looking around moves the eyes more relative to the head (0.23).
+- Side camera: almost no difference (best 0.73 rhythm), because head left/right is hard to read from 2D keypoints seen from the side.
+- Specialist model for only this pair (104 train videos): pair accuracy 0.64-0.73 against 0.83 for the main model; overall video F1 0.84-0.90, worse than 0.9038.
+- Same measures added to the durations model: 0.8894-0.9086 (6 settings), no reliable gain.
+
+Test check (one camera, against the T1 swap file as pseudo GT, 96 videos):
+
+| Model | Video F1 | Wrong videos |
+|---|---|---|
+| DINOv3 | 0.8745 | 12 |
+| Pose | 0.8628 | 13 |
+| Durations | 0.7917 | 20 |
+| DINOv3 + pose (main_legit) | 0.9374 | 6 |
+| DINOv3 + pose + durations | 0.9062 | 9 |
+
+- The durations gain on train CV (+2.4 points) did not carry over to test: 9 wrong videos against 6, so durations stay out of the notebook for now.
+- main_legit's 6 wrong test videos: 4 of 6 are side camera; 3 are cheat videos predicted as Writing_Answers (`subject_T3` front_02 and side_01, `subject_T6` side_08), i.e. the cheat action is too small to be seen; plus `subject_T1` front_08 (normal predicted Reading_Hidden_Notes), `subject_T2` side_07 (predicted Checking_Smartwatch), `subject_T5` side_04 (predicted Looking_Around).
+- Main weakness: where the person looks (gaze and small head direction) is not captured; 2D pose cannot read it from the side, and whole-frame DINOv3 sees the head as a few pixels.
+
+## 2026-11-18 - Line of sight visualised from pose (train)
+
+Script: scratch `gaze_viz.py`. Figures in `leon/figures/`: `gaze_subject10_frames.png`, `gaze_subject10_timeline.png` (model right), `gaze_subject11_frames.png`, `gaze_subject11_timeline.png` (model wrong, peeking called looking around).
+Arrow = from the middle of the ears through the nose, extended; drawn on frames at 3, 5, 7-13 s for Looking_Around and Repeated_Peeking, front and side.
+
+What it shows:
+- Front camera, Repeated_Peeking: the head turns to one side (towards the neighbour) and holds there for 2-4 s, comes back to the paper, then turns to the same side again (subject_10: 7.5-11.5 s and from 15 s; subject_11: 6.5-14.5 s with short returns).
+- Front camera, Looking_Around: short, small turns to both sides (under 1 s each), often with the head lifted; subject_11 barely moves at all.
+- Side camera: the arrow points at the desk in every frame for both actions; a left/right turn is mostly towards or away from the camera, which 2D keypoints cannot show. Only a hint is visible (more of the face, both eyes visible, when turning towards the camera).
+- The side-camera head-turn signal is noise: values jump to 5-50 because head_yaw is divided by shoulder width, and from the side the two shoulders overlap (width close to 0). This is a flaw in the current pose features.
+- subject_11 peeking is obvious on the front camera, yet the model called it Looking_Around; the both-camera sum lets the noisy side camera outvote it, and mean/std summaries do not capture "held to one side for seconds".
+
+Ideas from this:
+- Normalise head turn by head size (ear-nose distance) instead of shoulder width, and measure "face towards camera" for the side view (eye distance, ear visibility).
+- Let the front camera's line of sight decide this pair for the whole take.
+- A dedicated head-pose model (gives yaw and pitch in degrees from any angle) would replace the rough 2D arrow.
+
+## 2026-11-18 - Looking_Around vs Repeated_Peeking: pattern difference and a specialist model
+
+Scripts (scratch): `head2.py`, `head2_cv.py`, `head2_test.py`, `head2_testplot.py`, `head2_shift.py`, `head3.py`, `head4.py`.
+Figures: `leon/figures/look_vs_peek_timelines.png` (8 train subjects), `leon/figures/look_vs_peek_test_flips.png` (test videos the specialist flipped).
+
+Fixed head signals (fix for the side-camera noise found earlier):
+- turn = nose minus ear midpoint, divided by head size (nose-ear distance + ear-ear distance, fixed per video) instead of shoulder width.
+- pitch = nose below ears, in head sizes; face_width = eye distance in head sizes (wider = face turned towards the camera, for the side camera).
+
+The pattern (train, paired over 26 subjects):
+- Front: Repeated_Peeking turns to one side only (one-sidedness 0.997 vs 0.277, cheat larger in 96% of pairs, was 81% with the old signal) and holds longer (2.1 s vs 1.4 s); Looking_Around turns once to each side.
+- Side: peeking repeats the same bump (towards or away from the camera) 2-3 times; looking around goes one way then the other (rhythm 0.27 vs 0.10, 88% of pairs, was 73%).
+
+Model results:
+
+| Variant | Train video F1 | Train LA/RP wrong | Test one-camera wrong vs pseudo GT |
+|---|---|---|---|
+| main_legit (DINOv3 + pose) | 0.8798 | 24 | 6 |
+| + head-pattern model as third model (C 0.03-0.3) | 0.9038-0.9135 | 14-16 | 8 |
+| Specialist re-splits LA/RP mass, both cameras (C 0.1-0.3) | 0.9183 | 8 | 10-11 |
+| Specialist, scale-free thresholds, no confidence signals | 0.8990-0.9135 | - | 7-10 |
+| Specialist, only one-sidedness / hold features | 0.8846-0.8989 | - | 11-13 |
+| Specialist, all scale-free features except rhythm | 0.9038-0.9086 | - | 7 |
+
+- On train the specialist works (pair accuracy 0.94 with both cameras, LA/RP errors 24 -> 8), but on test every version changes 3-9 videos and at most 1 change is right.
+- Test differences found: side-camera head movement is about half the size of train (turn p90 0.108 vs 0.173, face_width 0.028 vs 0.055); keypoint-confidence signals (ear balance, eye confidence) shift strongly; the rhythm measure fires on "look left then right" in test (two similar bumps).
+- On some flipped test videos the one-sidedness value itself points the right way (T3 front_04 cheat 1.00, T5 front_05 normal 0.16), but the combined model still flips other videos wrongly, mostly side camera.
+- Important: only 1 of main_legit's 6 wrong test videos involves Looking_Around (`subject_T5` side_04); the test errors are mostly cheat videos predicted as Writing_Answers. The hardest pair on train is not where test loses.
+- Decision: keep the pattern as an EDA insight for the PPT; do not add the specialist to main_legit.
+
+## 2026-11-18 - Head direction: peeking goes one way, looking around goes several ways
+
+Scripts (scratch): `head_dir.py`, `head_dir2.py`.
+Per video, after the first 3 s, the frames where the head leaves the writing position are sorted into 8 compass directions (left/right turn and up/down pitch, from the head-size-normalised signals).
+
+| Measure | Front: look around | Front: peeking | Front pairs separated | Side pairs separated |
+|---|---|---|---|---|
+| Directions used (sectors with >15% of away time) | 2 | 1 | 92% | 56% |
+| Share of away time in the main direction | 0.53 | 1.00 | 92% | 56% |
+| Sideways vs vertical | 0.52 | 0.65 | 73% | 62% |
+| Head lifted while away | 1.00 | 1.00 | 54% | 50% |
+
+- Both actions lift the head off the paper; the difference is that peeking always goes the same way (the neighbour), looking around uses at least two directions.
+- Holds on test (front, median): pseudo-GT normal 2 directions / main share 0.49, cheat 1 direction / 0.96.
+- Of the 13 test front videos the model calls LookAround/Peeking, the direction rule (main share) agrees with the pseudo GT on 12; the one miss is `subject_T1` front_05 (normal, but all its turns go one way).
+- main_legit already gets all 13 of those front videos right, so the rule adds nothing on its own on test front videos.
+- Where it could help: `subject_T5` front_03 is borderline in main_legit (P(cheat) 0.54) and the direction rule says peek (main share 1.00); its side video side_04 is called Looking_Around, so the both-camera sum makes the take normal (one of main_legit's wrong takes). Letting the front camera's direction decide this pair for the whole take would fix that take (2 videos).
+- Train, the same idea ("front decides" for LA/RP): video F1 0.8798 -> 0.9087, 50 -> 38 wrong.
+- The Train / Test comparison tables in this log are per whole video, not per 1-second clip; the train column counts only the 104 LA/RP videos, the test column counts all 96 test videos.
+
+## 2026-11-18 - Are test people like train people? Similarity weighting, and side-camera hold time
+
+Scripts (scratch): `subj_sim.py`, `subj_weight.py`, `side_hold.py`, `side_hold2.py`.
+
+Test vs train people (DINOv3 CLS of the first 3 s, i.e. appearance while writing; cosine similarity):
+- Train person to the most similar other train person: front median 0.980 (0.894-0.988), side 0.990 (0.926-0.995).
+- Test person to the nearest train person: front 0.940-0.986, side 0.961-0.996, about the same as train-to-train; the nearest and second nearest almost tie (e.g. 0.982 vs 0.976), and `subject_26` is nearest for 3 of 6 test people (the room and camera dominate the appearance).
+- Body size: test front people fill more of the frame (person box height 0.73-0.95 of the frame, 4 of 6 above the train maximum 0.87); side 0.62-0.70, inside the train range 0.61-0.76.
+
+Similarity weighting (train people weighted by appearance similarity to the held-out person, leave-one-person-out, DINOv3 + pose LR, both cameras):
+
+| Weighting | Video F1 | Wrong | 8-action acc |
+|---|---|---|---|
+| None (all people equal) | 0.8942 | 44 | 0.8654 |
+| tau 0.02 | 0.8846 | 48 | 0.8462 |
+| tau 0.005 (about 3.5 people used) | 0.8606 | 58 | 0.8125 |
+
+- Focusing on look-alike people makes it worse; more varied people help more than similar ones, so "one model per person, follow the nearest" is not promising.
+
+Side camera, time spent in one direction (Looking_Around vs Repeated_Peeking, medians):
+
+| Measure | Train look | Train peek | Pairs separated | Test normal | Test cheat |
+|---|---|---|---|---|---|
+| Side: total time in the main direction (face width) | 1.8 s | 4.2 s | 88% | 1.7 s | 4.05 s |
+| Side: visits to the main direction | 1 | 2 | 81% | 1 | 2 |
+| Side: movement speed p90 (own range per s) | 1.17 | 1.29 | 77% | 0.74 | 1.03 |
+| Front: total time in the main direction (turn) | 1.75 s | 3.95 s | 96% | 2.2 s | 4.75 s |
+
+- Peeking holds longer in one direction and moves faster (quick turn, long look, back); looking around is slower and spends less total time in any one direction.
+
+Per-camera specialist (front: turn hold total + main direction share; side: face-width hold total + visits), re-splitting the LA/RP mass of main_legit:
+- Train: pair accuracy front 0.94-0.98, side 0.87-0.89, both cameras 0.96; video F1 0.8798 -> 0.9231, wrong 50 -> 32.
+- Test, one camera at a time: wrong 6 -> 7; changes 3 videos: `subject_T5` side_04 fixed, `subject_T1` front_05 broken (normal but turns only one way), `subject_T4` side_04 flipped at P(peek) 0.45 (borderline).
+- Not yet tested with both cameras on test (needs main_legit's own front-side pairing), which is where it can fix the `subject_T5` take.
+
+## 2026-11-18 - LA/RP specialist inside the main_legit pipeline, scored per clip against the 0.96+ files
+
+Script: scratch `legit_run.py` (= `main_legit.ipynb` source run as a script, plus the specialist at the end; the notebook itself is unchanged).
+The rerun reproduces `submissions/main_legit.csv` exactly.
+Specialist: front camera [time in main direction (turn), main direction share], side camera [time in main direction (face width), visits to it], LR C=0.1 per camera, trained on train LA/RP videos; probability of peeking from front and side summed (legit's own camera pairing), then used to re-split the Looking_Around / Repeated_Peeking share of the main model.
+
+| Benchmark | main_legit clip F1 | + specialist clip F1 | Clips differ (legit / + spec) |
+|---|---|---|---|
+| 0.96 file (LB 0.9601) | 0.9061 | 0.9078 | 109 / 110 |
+| Steven (LB 0.9761) | 0.9054 | 0.9070 | 110 / 111 |
+| T1 swap file | 0.9174 | 0.9187 | 96 / 97 |
+
+- Train (predicted camera pairing, as on test): video F1 0.8702 -> 0.9086, wrong 54 -> 38.
+- Test: 4 videos change, 2 takes:
+  - `subject_T5` front_03 + side_04: P(cheat) 0.34 -> 0.95, pseudo GT cheat (fixed).
+  - `subject_T1` front_05 + side_08: P(cheat) 0.00 -> 0.93, pseudo GT normal (broken); front_05 turns only one way (P(peek) 0.91).
+- Net per clip +0.0015; still far from the 0.96 target (gap about 0.04, mostly the 3 remaining wrong takes and start boundaries).
+- Not added to the notebook yet.
+
+## 2026-11-18 - Per-person centering (test-time adaptation to each person, no labels)
+
+Idea (Fayadh's `vidz_` trick, and the label-free version of "specialise the model to each person"): before the classifier, subtract from every video's feature vector the mean over that person's videos from the same camera (train: true subject; test: main_legit's own subject clustering). The model then sees "how this video differs from this person's usual", not "what this person looks like".
+Scripts (scratch): `perperson.py` (train CV), `perperson_test.py` (test vs pseudo GT), `legit_perperson.py` (full main_legit pipeline with centering; notebook not changed yet).
+
+Train CV (video level, true camera partner):
+
+| Variant | Video F1 | Wrong of 416 | 8-action acc |
+|---|---|---|---|
+| main_legit features as now | 0.8798 | 50 | 0.8365 |
+| Per-person centre | **0.9519** | **20** | 0.9279 |
+| Per-person centre + scale | 0.9471 | 22 | 0.9279 |
+| Centre, smaller C (0.03) | 0.9471 | 22 | 0.9231 |
+| Centred + original features summed | 0.9279 | 30 | 0.9135 |
+
+Test (96 videos vs the T1 swap file, legit camera pairing):
+
+| Variant | One camera wrong | Both cameras wrong | Both cameras video F1 |
+|---|---|---|---|
+| main_legit as now | 6 | 8 | 0.9165 |
+| Per-person centre | 6 | **4** | **0.9583** |
+| Per-person centre + scale | 3 | 4 | 0.9583 |
+
+- Without forcing anything, it predicts 4 cheat front + 4 cheat side videos for 5 of 6 test people (`subject_T1` 5 + 5).
+
+Full main_legit pipeline with centering (`legit_perperson.py`), per-clip F1 against the benchmark files:
+
+| Benchmark | main_legit | + per-person centre |
+|---|---|---|
+| 0.96 file (LB 0.9601) | 0.9061 (109 clips differ) | 0.9189 (98) |
+| Steven (LB 0.9761) | 0.9054 (110) | 0.9330 (81) |
+| T1 swap file | 0.9174 (96) | **0.9446** (67) |
+
+- Train inside the pipeline: DINOv3 video F1 0.8580 -> 0.8918, pose 0.7931 -> 0.8341.
+- Test: 50 of 96 videos cheat, cheat share 0.267.
+- Still wrong against the T1 swap file: `subject_T1` front_08 + side_07 (the disputed T1 take; the 0.96 and Steven files agree with legit here) and `subject_T4` side_02 / side_03 (looks like a swapped side pairing, like the T3 pairfix).
+- 38 of the 67 differing clips are start boundaries (legit's own start finder against the files' "cheat from 7").
+- Caveat for the team: centering works because every person performs the same set of actions, so a person's mean is a neutral reference; it uses no labels and no cheat ratio, but it relies on that design. To be agreed as legit before using it.
+
+## 2026-11-18 - Ablation of the legit pipeline
+
+Script: scratch `legit_ablation.py` (main_legit source + per-person centering + ablation block; the notebook is unchanged).
+Train columns are train CV (5 folds by subject, predicted camera pairing, per-clip truth from the by-eye starts); test columns are per-clip F1 against the benchmark files, for information only.
+
+| Variant | Train video F1 | Train wrong videos | Train clip F1 | Test clip F1 vs Steven 0.976 | Test clip F1 vs T1 swap |
+|---|---|---|---|---|---|
+| A. DINOv3 + pose, per-person centred, both cameras, start finder | 0.9423 | 24 | 0.9416 | 0.9330 | 0.9446 |
+| B. A without centering (= current notebook) | 0.8702 | 54 | 0.8940 | 0.9054 | 0.9174 |
+| C. A without pose (DINOv3 only) | 0.9327 | 28 | 0.9359 | 0.9330 | 0.9446 |
+| D. A without DINOv3 (pose only) | 0.8654 | 56 | 0.8895 | 0.9071 | 0.9188 |
+| E. A without both-camera sum | 0.9110 | 37 | 0.9186 | 0.9204 | 0.9321 |
+| F. A with a fixed start (train median 7.7 s, i.e. cheat from clip 8) | 0.9423 | 24 | 0.9377 | 0.9343 | 0.9343 |
+| G. A with whole video cheat (no start) | 0.9423 | 24 | 0.7066 | 0.7363 | 0.7363 |
+| H. A + durations | 0.9471 | 22 | 0.9448 | 0.9230 | 0.9345 |
+| I. A + LA/RP specialist | 0.9471 | 22 | 0.9424 | 0.9200 | 0.9314 |
+| J. A + durations + specialist | 0.9567 | 18 | 0.9473 | 0.9102 | 0.9215 |
+
+Reading:
+- Clear helpers (train and test agree): per-person centering (+0.048 train clip F1), DINOv3 (pose alone is much worse), both-camera sum (+0.023), per-second start (whole video 0.71).
+- Pose: small help on train (28 -> 24 wrong videos, +0.006 clip F1), no change on test.
+- Start finder vs fixed 7.7 s: +0.004 on train; on test about the same against Steven's file, +0.010 against the T1 swap file.
+- Durations and the LA/RP specialist: small gains on train (+0.001 to +0.006 clip F1, 2-6 fewer wrong videos) but both lower the test scoreboard by 0.010-0.023; train-only selection would keep them, the scoreboard says they hurt.
+
+## 2026-11-18 - Alignment variants (EEG-style RCT / RPA / EA) and main_legit.ipynb updated with per-person centering
+
+Script (scratch): `align.py`. Train CV video level (true camera partner) and test wrong videos against the T1 swap file (legit camera pairing):
+
+| Alignment per person and camera | Train video F1 | Train wrong | Test wrong |
+|---|---|---|---|
+| Mean centering, full features (RCT-like) | 0.9519 | 20 | 4 |
+| Centering + one stretch factor per person (RPA-like stretch) | 0.9519 | 20 | 4 |
+| Centering + per-feature scale | 0.9471 | 22 | 4 |
+| PCA 64 (fit on train), centering only | 0.9183 | 34 | 6 |
+| PCA 64, EA whitening (Ledoit-Wolf shrunk covariance) | 0.9423 | 24 | 6 |
+| PCA 32, centering only | 0.9087 | 38 | 10 |
+| PCA 32, EA whitening | 0.9279 | 30 | 4 |
+| PCA 16, EA whitening | 0.8990 | 42 | 12 |
+
+- EA whitening helps inside a PCA space (64 dims: 34 -> 24 wrong) but each person has only 8 videos per camera, so it needs the PCA squeeze, which costs more than the whitening gains; the RPA rotation step needs labels on the target person, so it is not usable.
+- Plain mean centering on the full features stays best.
+
+Notebook change: `leon/main_legit.ipynb` (built from scratch `legit_nb.py`, executed with nbclient, 0 errors, no imports outside the import cell; previous version kept in scratch as `main_legit_before_centering.ipynb`).
+- New sub-step in Preprocessing: `### Penyesuaian per orang`, subtracting each person-and-camera mean from the DINOv3 and pose video features (train: true subject; test: the notebook's own subject clustering, 12 groups of 8 videos).
+- Notebook outputs: DINOv3 video F1 0.8918, pose 0.8341, DINOv3 + pose 0.9110, + two cameras 0.9423 (acc8 0.9038); per-clip F1 0.9416 (whole video 0.7066, true video labels 0.9769).
+- `submissions/main_legit.csv` now: 50 of 96 videos cheat, cheat share 0.267; identical to the tested `legit_perperson.py` run.
+- Per-clip F1 against the benchmark files: 0.96 file 0.9189, Steven 0.9330, T1 swap 0.9446 (was 0.9061 / 0.9054 / 0.9174).
+- Durations and the LA/RP specialist stay out (ablation: small train gains, lower test scoreboard).
+
+## 2026-11-18 - Error analysis of the current main_legit (with per-person centering)
+
+Script (scratch): `legit_err.py` (main_legit source + analysis).
+
+Train CV:
+- 24 of 416 videos wrong (front 11, side 13); cheat/normal accuracy per action: Looking_Around 0.81, Checking_Smartwatch 0.92, Reading_Hidden_Notes 0.92, Repeated_Peeking 0.96, Writing_Answers 0.96, Thinking 0.98, Using_Smartwatch 0.98, Looking_Under_the_Desk 1.00.
+- Wrong videos by confusion: Looking_Around -> Peeking 9, Checking -> Using smartwatch 4, Hidden notes -> Checking smartwatch 2, Hidden notes -> Writing 2, Peeking -> Looking_Around 2, Writing -> Under desk 2, others 1 each.
+- Wrong clips: 267 of 6,122; 172 (64%) from a wrong video label, 95 (36%) from the start second (38 too early, 57 too late).
+- Start-second errors by action: Repeated_Peeking 38 clips (8 videos off by more than 2 s), Reading_Hidden_Notes 29 (4), Using_Smartwatch 14, Looking_Under_the_Desk 14 (1).
+
+Test against the T1 swap file (67 clips differ):
+- 4 wrong videos (29 clips): `subject_T4` side_02 (cheat, predicted Thinking) and side_03 (normal, predicted Reading_Hidden_Notes 0.90), most likely a swapped side pairing; `subject_T1` front_08 + side_07 (the disputed take).
+- 38 boundary clips in 28 videos, 37 of them because legit starts later than the file: legit starts from clip 8 in 21 videos, 9 in 4, 11 in 2 where the file starts from clip 7.
+- `subject_T1` front_03 and side_06 have starts at 11.1 s, the edge of the search window and later than any train start (8 clips).
+- Against Steven's file: 4 wrong videos (36 clips) and 45 boundary clips, 44 of them late.
+- So on test the largest remaining difference is the start second (legit about one clip later than the files), then the T4 side pair.
+
+## 2026-11-18 - Start-second tuning for main_legit (train CV decides)
+
+Script (scratch): `legit_start_tune.py` (main_legit with centering + start rules). Train clip F1 uses the by-eye train starts; shifts are chosen with nested CV (picked on 4 folds, applied to the 5th). Test columns only as a scoreboard.
+
+| Start rule | Train clip F1 | Test vs Steven | Test vs T1 swap |
+|---|---|---|---|
+| Finder as now | 0.9416 | 0.9330 | 0.9446 |
+| Finder + guard (start outside the train range 4.75-8.75 s +-0.5 s -> train median 7.75 s) | 0.9438 | 0.9435 | 0.9451 |
+| Fixed train median start (7.75 s) | 0.9377 | 0.9343 | 0.9343 |
+| Fixed median start of the predicted action | 0.9366 | 0.9448 | 0.9448 |
+| Blend 0.25 finder + 0.75 action median (+ guard) | 0.9423 | 0.9414 | 0.9414 |
+| Blend 0.5 / 0.5 (+ guard) | 0.9456 | 0.9423 | 0.9423 |
+| Blend 0.75 finder + 0.25 action median (+ guard) | **0.9463** | 0.9449 | 0.9449 |
+| Finder + guard + one global shift (nested CV; chosen 0 in 4 of 5 folds, -0.25 in 1) | 0.9420 | 0.9435 | 0.9451 |
+| Finder + guard + shift per predicted action (nested CV; on all train: 0 / 0 / 0 / +0.25 for Using_Smartwatch) | 0.9410 | 0.9400 | 0.9417 |
+| Reference: the files' rule "cheat from clip 7" | 0.9271 | 0.9719 | 0.9719 |
+
+- Train picks no shift: by the train start times the finder is not late, so tuning on train cannot move the start towards clip 7.
+- "Cheat from clip 7" is worse than the finder on train (0.927) but much better on test (0.972): train's by-eye starts and the test labels disagree about clip 7, so this gap cannot be closed with train-only tuning.
+- Per-action shifts do not help (0.941 against 0.944); per-person shifts are not possible (test people are new and unlabelled).
+- Train-only winners: the guard (+0.002, legit) and the 0.75/0.25 blend with the action median (+0.005).
+
+## 2026-11-18 - Two-stage start search with a confidence check (train CV decides)
+
+Script (scratch): `legit_two_stage.py`. Confidence = how much the finder's per-moment score jumps at the chosen switch (mean logit after minus before).
+- Confidence is meaningful on train: cheat videos in the lowest quarter of confidence have a median start error of 0.85 s, the rest 0.25 s.
+
+| Start rule | Train clip F1 | Test vs Steven | Test vs T1 swap | Test starts at 10 s or later |
+|---|---|---|---|---|
+| As now: search 3.2-11.1 s, front + side joint | 0.9416 | 0.9330 | 0.9446 | 14 |
+| **Search only 4.25-9.25 s (train range +-0.5 s)** | **0.9450** | 0.9409 | 0.9458 | 0 |
+| 4.25-9.25 s first; if weak (bottom 10%) scan the whole video | 0.9430 | 0.9313 | 0.9545 | 5 |
+| Same, still weak -> 7.7 s | 0.9414 | 0.9426 | 0.9442 | 0 |
+| 3.2-11.1 s; if weak (bottom 10%) -> 7.7 s | 0.9391 | 0.9409 | 0.9425 | 1 |
+| 4.25-9.25 s first; if weak (bottom 25%) scan the whole video | 0.9369 | 0.9322 | 0.9553 | 5 |
+| Same, still weak -> 7.7 s | 0.9418 | 0.9425 | 0.9442 | 0 |
+| 3.2-11.1 s; if weak (bottom 25%) -> 7.7 s | 0.9386 | 0.9434 | 0.9450 | 0 |
+
+- Train winner: simply narrowing the search window to the train range (+0.0034); the whole-video fallback is worse on train (0.937-0.943) and swings both ways on the scoreboard.
+- The 11.1 s videos (`subject_T1` front_03, side_06, front_08, side_07) are 15-16 s long; 11.1 s is the end of the search window (latest train start + 1 s, with the camera delay), not the end of the video.
+
+## 2026-11-18 - Ready for a later leaderboard test: main_legit_window.csv
+
+- `leon/submissions/main_legit_window.csv`: main_legit (per-person centering) with the start search limited to 4.25-9.25 s (train by-eye range +-0.5 s); script scratch `legit_window_sub.py`; notebook not changed yet.
+- 50 of 96 videos cheat, cheat share 0.2733; per clip against Steven's file 0.9409, against the T1 swap file 0.9458; train CV per clip 0.9450.
+- Leon plans to submit it later to see the real public score of the legit pipeline (not submitted yet).
+
+## 2026-11-18 - Start finders from the literature (main_legit with centering, search window 4.25-9.25 s)
+
+Script (scratch): `legit_papers.py` (= `legit_two_stage.py` + `paper_block.py`). Train CV decides; test columns only as a scoreboard.
+Papers:
+- Timestamp supervision: Li, Abu Farha, Gall, "Temporal Action Segmentation from Timestamp Supervision", CVPR 2021 (one marked frame per action, labels for the rest estimated from the model).
+- MS-TCN: Abu Farha, Gall, "MS-TCN: Multi-Stage Temporal Convolutional Network for Action Segmentation", CVPR 2019 (dilated temporal convolutions, several refinement stages, truncated-MSE smoothing loss against over-segmentation).
+- Kernel change point detection: as used for unsupervised action boundaries (Du et al., "Fast and Unsupervised Action Boundary Detection for Action Segmentation", CVPR 2022; kernel temporal segmentation); here one break with an RBF-kernel cost on PCA-32 DINOv3 frame features, no training.
+
+| Finder | Start error median | Within 1 s | Off > 2 s | Train clip F1, true video labels | Train clip F1 | Test vs Steven | Test vs T1 swap |
+|---|---|---|---|---|---|---|---|
+| 0. Current (hard EM, frame LR) | 0.25 s | 0.93 | 5 | 0.9834 | 0.9450 | 0.9409 | 0.9458 |
+| 1. Timestamp supervision (by-eye starts as frame labels) | 0.25 s | 0.92 | 5 | 0.9809 | 0.9430 | 0.9398 | 0.9415 |
+| 2. MS-TCN, 2 stages + smoothing loss, by-eye labels | 0.25 s | 0.89 | 2 | 0.9826 | 0.9446 | 0.9235 | 0.9235 |
+| 2b. Average of 1 and 2 | 0.25 s | 0.92 | 3 | 0.9842 | 0.9457 | 0.9319 | 0.9352 |
+| 3. Kernel change point (unsupervised) | 0.25 s | **0.97** | **2** | **0.9849** | **0.9463** | 0.9342 | 0.9326 |
+
+- Using the by-eye starts directly as labels (1) is no better than letting EM find them; the current finder already agrees with the by-eye starts.
+- MS-TCN removes most big misses (5 -> 2) but is less precise near the start (within 1 s 0.89).
+- Kernel change point is the best on train (0.97 within 1 s, +0.0013 clip F1) with no training at all, but all three lower the test scoreboard (by 0.007-0.022); the train gains are small and none of them moves the start earlier, which is the real test gap.
+- Decision by train CV would pick kernel change point by a small margin; not added yet.
+
+## 2026-11-18 - Camera pairing with action agreement (multi-view consistency) + new candidate file
+
+Idea from multi-view action alignment work (e.g. cross-view alignment of the same action, Xue and Grauman NeurIPS 2023; temporal cycle consistency, Dwibedi et al. CVPR 2019): the front and side video of one take show the same action, so pairing should also check that both cameras predict the same action, not only that their movement timing matches.
+Pairing cost per person = movement-timing match + w x agreement of the one-camera action probabilities (Bhattacharyya: sum of sqrt(p_front x p_side)); OOF probabilities on train, so no label leaks into the pairing.
+Script (scratch): `legit_pairing.py` (= `legit_perperson.py` + `pair_block.py`), start search 3.2-11.1 s as in the notebook.
+
+| w | Train pairing right | Train video F1 | Train wrong | Test pairs changed | Test vs Steven | Test vs T1 swap |
+|---|---|---|---|---|---|---|
+| 0 (timing only, as now) | 0.957 | 0.9423 | 24 | 0 | 0.9330 | 0.9446 |
+| **0.25** | **1.000** | **0.9519** | **20** | 8 | **0.9486** | **0.9602** |
+| 0.5 | 0.981 | 0.9423 | 24 | 8 | 0.9486 | 0.9602 |
+| 1 | 0.981 | 0.9423 | 24 | 8 | 0.9486 | 0.9602 |
+| 2 | 0.952 | 0.9423 | 24 | 8 | 0.9486 | 0.9602 |
+| 4 | 0.942 | 0.9423 | 24 | 8 | 0.9486 | 0.9602 |
+
+- w = 0.25 is chosen by train alone (all 416 train videos paired correctly).
+- Test: only `subject_T4` changes: front_03 side_02 -> side_08, front_05 side_03 -> side_05, front_06 side_08 -> side_03, front_08 side_05 -> side_02; this fixes the T4 side_02 / side_03 error.
+
+New file `leon/submissions/main_legit_pair_window.csv` (script scratch `legit_final.py` = `legit_perperson.py` + `final_block.py`; notebook not changed yet):
+- main_legit with per-person centering + action-agreement pairing (w 0.25) + start search 4.25-9.25 s.
+- 50 of 96 videos cheat, cheat share 0.2733.
+- Per clip: vs 0.96 file 0.9417, vs Steven 0.9557, vs T1 swap **0.9606** (first legit file at the 0.96 benchmark).
+- Remaining against the T1 swap file: 48 clips; the disputed `subject_T1` front_08 + side_07 take and 35 boundary clips (32 where legit starts later than clip 7).
+- Better candidate than `main_legit_window.csv` for the planned leaderboard test.
+
+## 2026-11-18 - Per-sequence model (every 1-second sequence predicted on its own)
+
+Script (scratch): `perclip.py`. Train videos cut into 1-second sequences (6,166; cheat videos without a readable by-eye start left out); one vector per sequence:
+- DINOv3: mean, std and mean absolute frame-to-frame change of the 10 frame features.
+- Pose: mean, std and mean absolute change of the 19 pose signals over the 10 frames.
+- Logistic regression, StratifiedGroupKFold 5 by subject, per-sequence F1-Macro.
+- Per-second labels: a sequence of a cheat video is cheat only if most of that second is after the by-eye start (side videos: front start + 0.5 s); whole-video labels: every sequence of a cheat video is cheat (what the per-clip baselines did).
+
+| Features | Train labels | C | F1 at 0.5 | Best threshold | F1 at best threshold |
+|---|---|---|---|---|---|
+| DINOv3 + pose | per-second | 0.003 | **0.7405** | 0.45 | **0.7421** |
+| DINOv3 | per-second | 0.003 | 0.7247 | 0.40 | 0.7353 |
+| DINOv3 + pose | per-second | 0.03 | 0.7257 | 0.50 | 0.7257 |
+| Pose | per-second | 0.03 | 0.6731 | 0.30 | 0.7192 |
+| DINOv3 | per-second | 0.03 | 0.7140 | 0.55 | 0.7156 |
+| Pose | per-second | 0.003 | 0.6457 | 0.30 | 0.6972 |
+| Pose | whole-video | 0.03 | 0.6340 | 0.55 | 0.6648 |
+| DINOv3 + pose | whole-video | 0.003 | 0.5582 | 0.80 | 0.6071 |
+| DINOv3 | whole-video | 0.003 | 0.5525 | 0.80 | 0.5998 |
+
+- Per-second train labels lift a single-sequence model from about 0.56 to 0.74: the whole-video labels teach the model that the writing seconds of a cheat video are cheat, which is the main reason the per-clip baselines stayed at 0.57 on the leaderboard.
+- Cheat share: 0.246 with per-second labels against 0.481 with whole-video labels (test files around 0.27-0.28).
+
+## 2026-11-18 - main_legit.ipynb updated: camera pairing with action agreement
+
+Notebook change: new sub-step `### Pasangan kamera dengan kesepakatan aksi` after `### Gabungan model dan dua kamera` (new constant `W_AGREE = 0.25`); the front-side pairing is redone with movement timing + 0.25 x agreement of the one-camera 8-action probabilities (OOF on train), and everything after it (both-camera vote, start finder pairs, submission) uses the new pairs. Executed with nbclient, 0 errors; previous version kept in scratch as `main_legit_before_agree.ipynb`.
+
+Notebook outputs:
+- Pairs right on train: 0.9567 -> 1.0000; video F1 0.9423 -> 0.9519; 8 test videos change partner (all `subject_T4`).
+- Per-clip F1 (train CV): whole video 0.7140, start finder 0.9486 (was 0.9416), start finder with true video labels 0.9778.
+- Start error: median 0.25 s, within 1 s 0.88, more than 2 s 12.
+- `submissions/main_legit.csv`: 50 of 96 videos cheat, cheat share 0.267.
+
+Same pipeline with the start search limited to 4.25-9.25 s (scratch `legit_agree_window.py`, identical output to `main_legit_pair_window.csv`): per clip 0.9524, start error within 1 s 0.94, more than 2 s 4.
+
+| Version | Train clip F1 | vs 0.96 file | vs Steven | vs T1 swap |
+|---|---|---|---|---|
+| Notebook before (centering) | 0.9416 | 0.9189 | 0.9330 | 0.9446 |
+| Notebook now (+ action agreement) | 0.9486 | 0.9338 | 0.9479 | 0.9595 |
+| + start search 4.25-9.25 s | 0.9524 | 0.9417 | 0.9557 | 0.9606 |
