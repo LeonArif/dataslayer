@@ -1,5 +1,30 @@
 # Experiment logs
 
+## Not tried yet
+
+Ideas we have discussed but not run.
+When one is tried, delete it from this list and write its result as a normal dated entry below.
+Last updated 2026-11-20.
+
+Planned for the next session:
+- Fine-tune more unfrozen ViT-H+ blocks on 30-frame clips: 16, then 20 only if 16 is better, and keep going until the score stops improving. Past 20 blocks needs a cache from an earlier block than 12 and LoRA or a lighter optimizer.
+- Augment the train images (colour changes, small crops, blur, JPEG recode in the test format). A horizontal flip needs a check first, because the left and right hand matter.
+- Use the best fine-tuned backbone as the main DINOv3 feature extractor, also for the sequence models (E3 and E5 would read fine-tuned per-frame features instead of frozen ones). Choice to make: all 30 train frames (about 2 h) or every 3rd frame for train with 3 interleaved sets of 10 at test.
+- Rerun the blend with the 30-frame fine-tuned B (it replaces the old B and the frozen A).
+- Fine-tune LeVJEPA (the video model) instead of using it frozen. Heavier than ViT-H+: 30 frames of 196 patches are about 5,900 tokens per clip, so caching a middle layer would take tens of GB; probably needs fewer frames or only the top blocks. The sequence head on frozen LeVJEPA is already done (E5).
+- More frozen video models as extra blend members, using the same recipe as LeVJEPA (all 30 frames, per-frame vector or clip vector, logistic regression and sequence head). Candidates to check for availability and frame-count limits on the 8 GB GPU: V-JEPA 2, VideoMAE and VideoMAE v2, TimeSformer, Video Swin. Video-language models are not allowed, so no text-aligned ones.
+
+Teacher-student and context ideas:
+- Soft labels from the whole-video teacher on the sequence models (E3 and E5). Only tried on the logistic regression (C1, no gain).
+- Context guessing: an extra output that predicts the previous and next second's features from the clip alone, to give the model more to learn from (HalluciNet style).
+- Copying the teacher's per-person-centred features: the student learns to guess what the whole-video teacher computes.
+
+Smaller ideas:
+- Stacking (a logistic regression on the members' scores) instead of the weight grid in the blend.
+- Tuning E's own settings (PCA size, hidden size, epochs, dropout); each was run at one setting only.
+- A LightGBM head on the LeVJEPA features as in Owen's baseline (D1 used a logistic regression).
+- Re-extracting the frozen DINOv3 train features for all folds in the test format (only fold 0 was checked, the gap cost A about 0.02 to 0.03 F1).
+
 ## 2026-11-16 - baseline_cv.ipynb created
 
 Findings from the data:
@@ -1125,3 +1150,237 @@ Same pipeline with the start search limited to 4.25-9.25 s (scratch `legit_agree
 | Notebook before (centering) | 0.9416 | 0.9189 | 0.9330 | 0.9446 |
 | Notebook now (+ action agreement) | 0.9486 | 0.9338 | 0.9479 | 0.9595 |
 | + start search 4.25-9.25 s | 0.9524 | 0.9417 | 0.9557 | 0.9606 |
+
+## 2026-11-19 - main_legit.ipynb: start search limited to 4.25-9.25 s
+
+- Notebook change (cell "Detektor awal aksi" and the start-finder cell): the search window is now the front by-eye start range in train (4.75-8.75 s) plus 0.5 s each side, i.e. 4.25-9.25 s, instead of 3.2-11.1 s. No whole-video fallback (tested 2026-11-18, worse on train).
+- Pipeline in the notebook now: per-person centering + action-agreement camera pairing + start search 4.25-9.25 s.
+- Executed: 49 cells, 0 errors. `submissions/main_legit.csv` is identical to the former `main_legit_pair_window.csv` (now renamed by Leon to `submissions/submission.csv`), 0 clips differ.
+- Train: per clip 0.9524 (true video labels 0.9847), start within 1 s 0.94, more than 2 s off: 4, video F1 0.9519, pairs right 1.0.
+- Test: 50 of 96 videos cheat, cheat share 0.2733; per clip vs 0.96 file 0.9417, vs Steven 0.9557, vs T1 swap (`potential_1.csv`) 0.9606.
+
+## 2026-11-19 - T1 swap file submitted: public LB 1.0000000
+
+- File: `leon/submissions/1.csv` (= `main_t1swap_from7.csv`, later `potential_1.csv`; checked identical, 0 clips differ), submitted by Leon as `submission_t1.csv`.
+- Public LB **1.0000000**: every public clip right. Confirms Steven's video labels with the `subject_T1` swap (front_04 + side_01 cheat, front_08 + side_07 normal) and cheat from clip 7.
+- This file is now the best pseudo ground truth for main_legit. main_legit (centering + action agreement + start search 4.25-9.25 s) against it: F1 0.9606 per clip, 48 of 1515 clips wrong.
+
+## 2026-11-19 - main_legit_nosequence.ipynb created (every test sequence predicted on its own)
+
+- New notebook `leon/main_legit_nosequence.ipynb` (29 cells, 0 errors), output `leon/submissions/main_legit_nosequence.csv`.
+- No clip chaining, no person grouping, no camera pairing and no per-person centering on test: each test sequence is scored only from its own 30 frames; scaler, model and threshold are fitted on train only.
+- Train: every video cut into 1-second clips (frames 0-29, 30-59, ...), 6,166 clips; label 1 only for cheat-video clips mostly after the by-eye start (side = front + 0.5 s); 18 cheat videos without a readable start left out.
+- Features per clip: DINOv3 (mean, std, mean frame-to-frame change of the 10 cached frames, 7,680) + pose (19 signals x mean, std, mean change, 57).
+- Model: StandardScaler + Logistic Regression C 0.003, StratifiedGroupKFold 5 by subject, threshold from OOF.
+- Train CV per clip: 0.7405 at 0.5, **0.7421 at threshold 0.45** (same as the earlier `perclip.py` check).
+- OOF accuracy per action (front / side): weakest Repeated_Peeking 0.69 / 0.62, Reading_Hidden_Notes 0.78 / 0.70, Using_Smartwatch 0.79 / 0.69.
+- Test against `1.csv` (public 1.0): F1 0.7056, 322 of 1515 clips wrong (89 false cheat, 233 missed cheat); predicted cheat share 0.189 against 0.284.
+
+## 2026-11-19 - Fine-tuned ViT-H+ frame head, K=0 (frozen backbone + new head), scored in both notebooks
+
+- Setup: DINOv3 ViT-H+ blocks 21-32 run frozen on the cached block-20 output, new head (Dropout 0.2 + Linear 2560 -> 8 actions) trained 2 epochs on frames, 5 folds by subject (same folds as main_legit), frame labels writing before the start, the video's action after.
+- Held-out frame accuracy per fold: 0.63 / 0.71 / 0.58 / 0.64 / 0.67; train loss only fell 1.99 -> 1.83, so the head barely learned (features were not standardized before the head).
+- K=4 fold 0 frame accuracy 0.628, same as K=0 fold 0 (0.629). The run was then stopped by the system for low RAM (training and evaluation ran at the same time); K=4 folds 1-4, K=12/8/2 not run.
+- main_legit (train per clip / test vs `1.csv`, clips wrong):
+  - Notebook now (LR on pretrained DINOv3 + pose): 0.9524 / 0.9606, 48 wrong; DINOv3 LR 8-action acc 0.834, video F1 0.892.
+  - Fine-tuned head replaces the DINOv3 LR: 0.9091 / 0.9504, 61 wrong; head 8-action acc 0.668, video F1 0.776.
+  - Fine-tuned head multiplied with the DINOv3 LR: 0.9351 / 0.9606, 48 wrong; final video F1 0.928 (notebook now 0.952).
+- main_legit_nosequence (train per clip / test vs `1.csv`): notebook now 0.7421 / 0.7056; head only 0.665 / 0.6308; LR + head 0.7419 / 0.7117 (326 wrong).
+- Conclusion: K=0 head is worse than the pretrained LR everywhere; notebooks not changed.
+
+## 2026-11-19 - Bug in the fine-tuning script: trained blocks stayed frozen
+
+- Bug in scratch `ft_train.py`: the K=0 run switched off training for blocks 21-32, and the weight reload before the next run did not switch it back on. So the K=4 fold 0 run trained only the head, same as K=0 (frame accuracy 0.628 vs 0.629, same loss, GPU peak only 1.5 GB). No real 4/8/12-block fine-tuning has been tested yet.
+- Fix: trained blocks are switched on in every run, with a check that the trainable weight count is above K x 20M (K=12: 314.8M). The head now also standardizes its input (BatchNorm without learned scale) before Dropout + Linear.
+- Speed check K=12: 11 frames/s, GPU peak 6.45 of 8 GB. More than 12 blocks with full training does not fit in 8 GB and would also need a new cache from an earlier block.
+- Rerun started: K = 0, 12, 4, 8, output `cache/ft_hplus_block20/preds_v2/`, training alone (evaluation afterwards). The old `preds/` files are kept but are not valid for K=4.
+- Change before the rerun: the head is only used for training. After each fold, the fine-tuned backbone's features (CLS + mean patch, 2560, same format as main_legit's DINOv3 cache) are saved for all train frames and test frames, and fed into the notebooks' own logistic regression in place of (replace) or next to (add) the pretrained features. Fold f videos are scored by a logistic regression fitted on fold f backbone features of the other folds; test = average of the 5 fold models. Scripts: scratch `build_legit_ftfeat.py` -> `legit_ftfeat.py`, `ft_noseq_feat.py` (switched to main_legit's per-video folds, pretrained baseline rescored on them). Frames: 2 per second instead of 10, so K=0 doubles as the 2 fps pretrained control.
+- First sign the head fix works: K=0 fold 0 loss 1.69 -> 1.30 over 2 epochs (was 1.99 -> 1.83).
+- Rerun status (second stop by the system for low RAM): K=0 finished all 5 folds with backbone features saved (`preds_v2/`); K=12 fold 0 started and was stopped. The K=0 scoring in both notebooks ran at the same time as K=12 training (my mistake, I had planned training alone) and did not finish, so `ftfeat_eval.log` is empty.
+- With the standardizing head the K=0 held-out frame accuracy of the head itself fell to 0.34-0.49 (folds 2-4; was 0.58-0.67 without it) while the training loss dropped to 1.29. The head's own accuracy is not used for the final prediction (the logistic regression on the backbone features is), but it means the standardized head is a weak training signal across new people.
+- K=0 (frozen backbone, 2 fps features saved) scored in the no-sequence notebook on main_legit's per-video folds (scratch `ft_noseq_feat.py`), train per clip / test vs `1.csv` (clips wrong):
+  - Pretrained DINOv3 10 fps + pose: 0.7369 / 0.7195 (320).
+  - Frozen backbone 2 fps + pose: 0.7283 / 0.7112 (304).
+  - Pretrained + frozen backbone + pose: 0.7387 / 0.7222 (318).
+  - Going from 10 to 2 frames per second costs about 0.01 per clip on train; frozen features add nothing.
+- Rerun v3 started: K = 4, 12, 8 (K=0 dropped), reading the 13 GB token file by seeking instead of memory-mapping (the memory-mapped file counted against RAM and the system stopped the jobs twice), training running alone. Log: scratch `ft_train_v3.log`, output `cache/ft_hplus_block20/preds_v2/`.
+
+## 2026-11-19 - Fine-tuning ViT-H+ top blocks: first real result (K=4 trained blocks, no-sequence notebook)
+
+- Setup: top K of 32 blocks trained 2 epochs per fold (5 folds by subject, same as main_legit), head Dropout + Linear on standardized features (BatchNorm without learned scale). The head is only the training signal. The scored model is the notebook's own logistic regression on the fine-tuned backbone's features (CLS + mean patch), 2 frames per second, fold f clips scored with fold f's backbone, test = average of the 5 fold models. K=4: 105.0M trainable weights, 10 min per fold, GPU peak 3.0 GB.
+- Head held-out frame accuracy per fold: K=4 0.608 / 0.602 / 0.519 / 0.586 / 0.628; K=12 fold 0 0.659 (frozen head 0.629 on the same fold).
+- No-sequence notebook, same per-video folds, train per clip F1 / test vs `1.csv` F1 (clips wrong):
+  - Pretrained DINOv3 10 fps + pose: 0.7369 / 0.7195 (320)
+  - K=0 frozen backbone 2 fps + pose: 0.7283 / 0.7112 (304)
+  - **K=4 fine-tuned backbone + pose: 0.7767 / 0.7454 (260)**
+  - K=4 pretrained + fine-tuned + pose: 0.7803 / 0.7328 (266)
+- Fine-tuning 4 blocks gives +0.040 on train and +0.026 on test over the pretrained features (+0.049 / +0.034 over the frozen 2 fps control), the first gain from any change to the backbone. Predicted cheat share on test is low (0.145 against 0.284 true) because the threshold comes from the held-out train predictions (0.55).
+- Still running: K=12 (fold 1 of 5 done training), then K=8. Not yet scored in main_legit.
+
+## 2026-11-19 - Fine-tuning ViT-H+ top blocks: K=12 scored (no-sequence notebook)
+
+- K=12: 314.8M trainable weights, 13-40 min per fold (GPU shared with other work), GPU peak 6.5 GB. Head held-out frame accuracy per fold: 0.659 / 0.704 / 0.600 / 0.613 / 0.682 (K=4: 0.608 / 0.602 / 0.519 / 0.586 / 0.628).
+- No-sequence notebook, same per-video folds, train per clip F1 / test vs `1.csv` F1 (clips wrong):
+  - Pretrained DINOv3 10 fps + pose: 0.7369 / 0.7195 (320)
+  - K=4 fine-tuned + pose: 0.7767 / 0.7454 (260)
+  - **K=12 fine-tuned + pose: 0.7893 / 0.8094 (220), threshold 0.4, test cheat share 0.228**
+  - K=12 pretrained + fine-tuned + pose: 0.7932 / 0.7625 (250)
+- More trained blocks keeps helping (0 -> 4 -> 12: train 0.728 -> 0.777 -> 0.789, test 0.711 -> 0.745 -> 0.809). K=8 is training (2 of 5 folds done at the time of writing).
+
+## 2026-11-19 - Fine-tuning ViT-H+ top blocks: K=8 scored, comparison of 0 / 4 / 8 / 12 blocks (no-sequence notebook)
+
+- K=8: 210M trainable weights, 13-14 min per fold, GPU peak 5.2 GB. Head held-out frame accuracy per fold: 0.652 / 0.665 / 0.572 / 0.602 / 0.653.
+- Train per clip F1 / test vs `1.csv` F1 (clips wrong), fine-tuned backbone + pose, same per-video folds:
+
+| Trained blocks | Train per clip | Test vs `1.csv` | Wrong |
+|---|---|---|---|
+| 0 (frozen, 2 fps) | 0.7283 | 0.7112 | 304 |
+| 4 | 0.7767 | 0.7454 | 260 |
+| 8 | 0.7734 | 0.8023 | 222 |
+| 12 | 0.7893 | 0.8094 | 220 |
+
+- Pretrained DINOv3 10 fps + pose on the same folds: 0.7369 / 0.7195. Pretrained + fine-tuned together was worse on test for 8 blocks too (0.7818 / 0.7782).
+- 12 blocks is the best on both train and test; 8 is close on test but not above 4 on train (difference 0.003, within noise). 12 is the most the block-20 cache allows.
+- Decision (Leon): use all 30 frames of every test sequence from now on, run the final fine-tune once with the best block count and save its weights.
+
+## 2026-11-19 - nosequence_ft12.csv: file for the day's last submission
+
+- File: `leon/submissions/nosequence_ft12.csv` (1515 rows, id + label, same order as `sample_submission.csv`): no-sequence logistic regression on the 12-block fine-tuned backbone features + pose, each test clip scored alone, test = average of the 5 fold models, threshold 0.4 from held-out train predictions, cheat share 0.228.
+- Train per clip F1 0.7893; test vs `1.csv` F1 0.8094 (220 wrong).
+- Caveat: the fine-tuned features come from 2 of the 30 test frames (01 and 16) and pose from 10 of 30; it is a leaderboard probe, not yet the 30-frame version. The 12-block weights were not saved, so the 30-frame version needs a rerun of the fine-tune.
+
+## 2026-11-20 - 30-frame features done; A (30 frames, old pose) and E (sequence model) first scores
+
+- DINOv3 ViT-H+ (CLS + mean patch, 2560, fp16) cached for every frame: test (1515, 30, 2560) and 199,957 train frames in 416 videos, `cache/dinov3_hplus_224x400_step1_bf16/` (`extract30.py`, about 2 h 20 min, 24-27 frames/s). All values finite.
+- Pose on all 30 frames of every window (box from the middle frame) is extracting to `cache/pose_vitpose_all/` (`extract_pose_all.py`); the results below still use the old 10-frame pose.
+- Shared setup `common30.py`: same 6166 train clips as the no-sequence notebook, 30 DINOv3 frames per clip on both sides, main_legit per-video folds, threshold from held-out train predictions. Each member saves its held-out train predictions and test probabilities to `members/` for the blend.
+- Train per clip F1 / test vs `1.csv` F1 (clips wrong):
+
+| Member | Train per clip | Test vs `1.csv` | Wrong | Test cheat share |
+|---|---|---|---|---|
+| A: LR on DINOv3 10 frames + pose (old, same folds) | 0.7369 | 0.7195 | 320 | - |
+| A: LR on DINOv3 30 frames + old pose | 0.7391 | 0.7157 | 313 | 0.193 |
+| A: DINOv3 30 frames only | 0.7287 | 0.6936 | 362 | 0.247 |
+| A: old pose only | 0.7198 | 0.7088 | 344 | 0.247 |
+| E: BiGRU over 30 frames (PCA 128 per frame, DINOv3 only) | 0.7033 | 0.5793 | 375 | 0.075 |
+| E: transformer over 30 frames (same input) | 0.6998 | 0.5740 | 358 | 0.049 |
+
+- 30 frames instead of 10 does not change the frozen LR (train +0.002, test -0.004, noise).
+- E is worse than A on train, and on test it stops predicting cheat. Mean predicted cheat probability, held-out train vs test: A 0.247 / 0.258, E GRU 0.349 / 0.184, E transformer 0.300 / 0.159. A is stable between train and test, E is not.
+
+## 2026-11-20 - Train frames vs test delivery format: DINOv3 feature shift (train videos only)
+
+- Question: the test sequences are 640x360 JPEG frames, but the train DINOv3 features come from the full-size video frames. How far do the features move when a train frame is passed through the test format first (resize to 640x360 INTER_AREA, JPEG quality 90, as `extract_pose.py` already does, then the usual 400x224 resize)? Script `jpeg_shift.py`, 10 train videos (5 cheat, 5 normal, 90 frames each), relative L2 distance between feature vectors.
+- Result (mean over the 10 videos):
+  - Same frame, original vs test format: **0.120** (0.088 to 0.171 per video).
+  - Neighbouring frames, original: 0.027.
+  - Clip mean at 0-1 s vs 2-3 s, original: 0.055.
+- The format change moves a frame's features about 4.4 times more than one frame step and about 2.2 times more than the change between two different seconds of the same video. This is a train-vs-test domain gap in every DINOv3 member, and it is larger for models that use per-frame detail (E).
+- Not yet measured: how much of the shift is the resize and how much the JPEG; whether features extracted in the test format fix E and raise A. The 12-block fine-tuned backbone scored 0.809 on test despite the gap, so the gap is not fatal.
+
+## 2026-11-20 - A with 30-frame pose, C1 (student with teacher soft labels)
+
+- Pose on all 30 frames of every window finished (`cache/pose_vitpose_all/`: train (6456, 30, 17, 3), test (1515, 30, 17, 3), 58 min; box from the middle frame, same detector and pose model as before).
+- A, 30 DINOv3 frames + 30 pose frames, per-video folds (train per clip F1 / test vs `1.csv` F1, clips wrong):
+  - DINOv3 + pose: 0.7378 / 0.7182 (322), threshold 0.45, test cheat share 0.220.
+  - DINOv3 only: 0.7287 / 0.6936 (362).
+  - Pose only: 0.7135 / 0.7257 (324).
+  - Same as with the old 10-frame pose (0.7391 / 0.7157): 30 frames of pose do not change the frozen LR.
+- C1: teacher = main_legit held-out (per-video folds) video cheat probability x soft step at its guessed start second (scale 0.5 s); teacher on train clips AUC 0.9827, F1 0.9499. Student = the same LR as A on the 30-frame features with soft label q = (1 - a) * true + a * teacher (row duplication with weights):
+  - a = 0 (hard labels): 0.7378 / 0.7182.
+  - a = 0.5: 0.7373 / 0.7226 (312).
+  - a = 1.0: 0.7330 / 0.7138 (310).
+- Soft labels from this teacher bring nothing: it is almost the true label (start second error median 0.25 s, 94% within 1 s), so it adds almost no new information about the boundary clips.
+
+## 2026-11-20 - Does the raw-vs-test-format feature gap hurt? Fold-0 check (train only)
+
+- Setup (`extract30_testfmt.py`, `fmt_check.py`): the 96 fold-0 train videos (46k frames) re-extracted through the test delivery format (resize 640x360, JPEG q90, then the usual 400x224), `cache/dinov3_hplus_224x400_step1_bf16_testfmt/`. A and E trained on the raw features of folds 1-4 (as in all other runs), then scored on the 1364 fold-0 clips with raw features and with test-format features. Threshold fixed from the raw run.
+
+| Model | AUC raw / test format | F1 raw / test format | Mean predicted cheat raw / test format (true 0.243) |
+|---|---|---|---|
+| A, DINOv3 only | 0.7976 / 0.7866 | 0.7146 / 0.6833 | 0.331 / 0.432 |
+| A, DINOv3 + pose | 0.8155 / 0.8075 | 0.7297 / 0.7056 | 0.329 / 0.403 |
+| E, BiGRU, DINOv3 only | 0.7083 / 0.7108 | 0.6314 / 0.6219 | 0.282 / 0.222 |
+
+- The format gap shifts A's probabilities up (about +0.1) and costs about 0.02 to 0.03 F1 at a fixed threshold and 0.01 AUC: moderate, not a jump.
+- It does not explain E's test collapse: E's ranking is unchanged and its mean probability only moves 0.28 to 0.22, while on test it dropped from 0.35 (held-out train) to 0.18. The remaining E shift on test is not from the file format.
+- Decision: no full re-extraction of the frozen DINOv3 train features for now; new caches (fine-tuning) are built in the test format from the start.
+
+## 2026-11-20 - Blend check of A, C1, E (held-out train)
+
+- Held-out ranking score (AUC): A 0.8155, C1 (soft labels a=0.5) 0.8164, E GRU 0.7783, E transformer 0.7839.
+- A and C1 are almost the same model (probability correlation 0.989), so C1 is not a separate ensemble member.
+- E makes different mistakes than A (correlation 0.58, clips wrong for both 0.108 against 0.171 for A with C1). Blending A, C1 and both E models: AUC 0.8324, train per clip F1 0.7439 (A alone 0.7378).
+- On test the blends with E are worse (test vs `1.csv` 0.65 to 0.71) because E's test predictions are shifted low (cheat share 0.05 to 0.13).
+
+## 2026-11-20 - Sequence models over the clip's 30 frames (E2, E3), member B on 30-frame pose, first blend
+
+- Members, shared per-video folds, 6166 train clips, each clip scored alone (train per clip F1 / test vs `1.csv` F1, clips wrong, test cheat share):
+  - B12: 12-block fine-tuned backbone (2 frames per clip, as before) + 30-frame pose, LR: 0.7889 / 0.8064 (223), 0.226. Same as the earlier 0.7893 / 0.8094 with the 10-frame pose.
+  - E (DINOv3 PCA-128 per frame, BiGRU or transformer, no pose): 0.7033 / 0.5793 and 0.6998 / 0.5740, test cheat share 0.075 / 0.049.
+  - E2 (+ 19 per-frame pose signals): BiGRU 0.7286 / 0.5384, transformer 0.7401 / 0.6124, test cheat share 0.038 / 0.070.
+  - **E3 (DINOv3 part minus the clip's own mean, + pose signals): BiGRU 0.7722 / 0.7617 (276), transformer 0.7731 / 0.7428 (298), test cheat share 0.231 both.** Centring on the clip mean removes the train-vs-test static offset that made E2 collapse; the dynamics carry real signal.
+  - A with the same dynamics-only inputs in the logistic regression (no clip mean): 0.7127 / 0.6979, so the gain is from the sequence model, not only from dropping the mean.
+- E is the same frozen DINOv3 ViT-H+ backbone as A with a different head: a sequence model over the 30 per-frame vectors instead of a logistic regression on their mean, std and frame differences (E5: the same head on LeVJEPA). With a fine-tuned backbone the same head would sit on top of B's backbone.
+- Details of E: DINOv3 ViT-H+ frozen, per-frame 2560-d vector standardised and PCA to 128 (fit on train frames); BiGRU hidden 96 or 2-layer transformer width 64 with learned positions; mean + max pool over frames, dropout 0.3, linear; 25 epochs AdamW, one-cycle LR, input noise 0.1, 3 seeds per fold, test = average of 5 fold models x 3 seeds.
+- Held-out ranking score (AUC): A 0.8155, B12 0.8664, E3 BiGRU 0.8516, E3 transformer 0.8574.
+- Blend (`final_blend.py`): each member's probability turned into its rank inside its own held-out train predictions, weighted average, weights from {0, 1, 2} and threshold chosen on held-out train F1. Best: B12 x2 + E3 BiGRU x1 + E3 transformer x1, A weight 0, threshold 0.70: train per clip F1 0.8161 (B12 alone 0.7889), AUC 0.9012, test vs `1.csv` 0.8216, test cheat share 0.228. Written to `leon/submissions/nosequence_blend_v1.csv` (1515 rows, sample_submission order).
+- Caveats: the B12 part uses 2 of the 30 test frames (the 30-frame fine-tune is planned for next, with weights saved). D (LeVJEPA) features are still extracting.
+
+## 2026-11-20 - Tunable option: blend threshold (and the other knobs of the blend)
+
+- The blend score is the weighted average of each member's rank (position inside its own held-out train predictions), so the threshold is in rank space: 0.70 means "among the top 30% of held-out train scores". It is a tunable option of the pipeline: re-run the sweep (`thr_sweep.py`, step 0.025) whenever a member, a weight or a feature set changes, and pick the value on **held-out train F1**. Test vs `1.csv` is printed next to it only as a second check, it does not choose the value.
+- Sweep for the blend B12 x2 + E3 BiGRU + E3 transformer (train per clip F1 / test vs `1.csv` F1 / test cheat share):
+
+| Threshold | Train F1 | Test vs `1.csv` | Test cheat share |
+|---|---|---|---|
+| 0.600 | 0.7811 | 0.7898 | 0.373 |
+| 0.650 | 0.8004 | 0.8227 | 0.295 |
+| 0.675 | 0.8109 | 0.8273 | 0.259 |
+| **0.700** | **0.8161** | 0.8216 | 0.228 |
+| 0.725 | 0.8141 | 0.8193 | 0.208 |
+| 0.750 | 0.8120 | 0.8057 | 0.181 |
+| 0.800 | 0.7924 | 0.7412 | 0.123 |
+| 0.850 | 0.7441 | 0.6427 | 0.074 |
+
+- The curve is flat between 0.675 and 0.725 (train F1 0.811 to 0.816) and falls on both sides, faster on the high side (fewer predicted cheats than the real share). Best on held-out train: 0.700, which is the middle of that plateau. Best on the `1.csv` comparison (information only): 0.675, 0.8273, a gain of 0.006 that is within noise, so the threshold stays at 0.700. The train and test curves have the same shape.
+- Other tunable knobs of the blend and E, all chosen on held-out train: member weights (grid {0, 1, 2} per member, `final_blend.py`), E input size (PCA 128 dimensions), E hidden size (GRU 96, transformer 64), epochs (25), input noise (0.1), seeds per fold (3), logistic regression C (0.003).
+- 2026-11-20, on Leon's request ("trust the test more"): threshold 0.600 is worse than 0.700 on both measures (train F1 0.7811 against 0.8161, test vs `1.csv` 0.7898 against 0.8216, test cheat share 0.373). Alternative file at the test-best threshold: `leon/submissions/nosequence_blend_v1_thr0675.csv` (threshold 0.675, train F1 0.8109, test vs `1.csv` 0.8273). `nosequence_blend_v1.csv` (0.700, chosen on held-out train) is unchanged. Choosing 0.675 uses the `1.csv` comparison to set a pipeline value.
+
+## 2026-11-20 - E4: E3 trained on sliding 1-second windows (3x more clips from the same videos)
+
+- Same input and models as E3 (clip-mean-centred DINOv3 PCA-128 frames + 19 pose signals per frame, BiGRU or small transformer), but trained on windows slid by 10 frames over each video (17,702 windows instead of 6,166 non-overlapping clips, label = window centre after the start second), 10 epochs. Scored on the same aligned clips of the held-out fold and on the test clips, each alone (`e_slide.py`).
+- Train per clip F1 / test vs `1.csv` F1 (clips wrong), cheat share: E4 BiGRU 0.7679 / 0.7575 (286), 0.246; E4 transformer 0.7614 / 0.7276 (301), 0.196. E3 for reference: BiGRU 0.7722 / 0.7617, transformer 0.7731 / 0.7428.
+- No gain from overlapping windows (slightly worse): the extra windows are near-copies of the same 416 videos, so they add little new information. Not used in the blend.
+
+## 2026-11-20 - D (LeVJEPA video model) and E5, blend v2
+
+- LeVJEPA-1.5-Large (303M, frozen, `trust_remote_code` code read first: only math / numpy / torch / transformers, no network or exec calls), `extract_levjepa.py`: each 1-second clip fed as two interleaved 15-frame halves (frames 0,2,4,... and 1,3,5,...) so all 30 frames are used, 224x224 squashed, train frames through the test delivery format (640x360 + JPEG q90) first. Output per clip: 30 per-frame mean-patch vectors + the [cls] token of each half, `cache/levjepa_large_224_30/` (test (1515, 32, 1024), 416 train files, 37 min).
+- Train per clip F1 / test vs `1.csv` F1 (clips wrong), test cheat share, same per-video folds:
+  - D1: LR on LeVJEPA summary (mean, [cls], std, mean abs frame difference) + 30-frame pose: C=0.001 0.7368 / 0.7679 (295), 0.315; C=0.003 0.7315 / 0.7715 (293), 0.324; LeVJEPA only 0.7153 / 0.736 (360).
+  - E5: the E3 sequence models on LeVJEPA per-frame vectors (centred on the clip mean, PCA 128) + pose: BiGRU 0.7513 / 0.7792 (291), 0.356; transformer 0.7689 / 0.7881 (271), 0.321.
+- Held-out ranking score (AUC) of the best blends (`final_blend.py`, rank average, weights in {0, 1, 2}, threshold from held-out train F1):
+  - v1: B12 x2 + E3 BiGRU + E3 transformer: train 0.8161, AUC 0.9012, test vs `1.csv` 0.8216.
+  - **v2: B12 x2 + E3 BiGRU + E3 transformer + D1 + E5 transformer (E5 BiGRU 0): threshold 0.70, train 0.8265, AUC 0.9225, test vs `1.csv` 0.8342 (cheat share 0.251).** Written to `leon/submissions/nosequence_blend_v2.csv`.
+  - The top 12 weight combinations are within 0.003 of each other on train (0.8238 to 0.8265), so the exact weights are not important; using all six members (2/1/1/1/1/1) gives the highest AUC 0.9242 with train 0.8245 and test 0.8266.
+- Caveat as before: the B12 part uses 2 of the 30 test frames; the 30-frame fine-tune is for next time.
+
+## 2026-11-20 - Public leaderboard result of blend v2
+
+- `leon/submissions/submission.csv` (identical to `nosequence_blend_v2.csv`, checked clip by clip against the saved member predictions) scored **0.8518237** on the public leaderboard. Estimate from held-out train 0.8265 per clip, from the `1.csv` comparison 0.8342.
+- Leon's goal: reach about 0.9 in the independent setting.
+
+## 2026-11-20 - main.ipynb: the independent blend pipeline as a notebook
+
+- New notebook `leon/main.ipynb` (43 cells, simple-notebook style, Bahasa Indonesia, imports in the top cell, `%pip` pins include torch 2.11.0). It replaces the A-only no-sequence notebook (kept untouched as `leon/mainipynb`, a file name without the dot; the old video-pipeline main is `main_haram.ipynb`, renamed by Leon).
+- Pipeline in the notebook: train clips from the by-eye start seconds (procedure shown in the EDA section), per-video folds shared with the fine-tuned backbones, features read from caches, five members, rank blend, submission:
+  - fine-tuned 12-block backbone (cached features, 2 frames per clip) + 30-frame pose, logistic regression (C 0.003);
+  - LeVJEPA + 30-frame pose, logistic regression (C 0.001);
+  - BiGRU and small transformer over the clip's 30 DINOv3 frames (PCA 128, centred on the clip mean, + 19 per-frame pose signals);
+  - the same transformer over the 30 LeVJEPA per-frame vectors;
+  - blend: each member's rank inside its own held-out train predictions, weights in {0, 1, 2} and threshold chosen on held-out train F1 inside the notebook (no `1.csv`, no test statistics); output `submissions/main.csv`.
+- Dropped from the earlier blend search: frozen-DINOv3 logistic regression A (weight 0) and the LeVJEPA BiGRU (weight 0).
+- Cache-building scripts copied into the repo with relative paths: `leon/scripts/extract_dino30.py`, `extract_pose_all.py`, `extract_levjepa.py`, `ft_cache.py`, `ft_train.py`, `rowreader.py` (the earlier copies only lived in a temporary folder). Weights of the 12-block fine-tune were never saved, so its features can only be read from the cache.
+- Known limit: the fine-tuned member uses 2 of the 30 frames of every test clip, to be replaced by the 30-frame fine-tune.
+- Verification run of the notebook code from top to bottom (output redirected to a temporary folder, nothing written to `submissions/`): the members score (F1-Macro per clip at threshold 0.5) fine-tuned + pose 0.7872, LeVJEPA + pose 0.7212, BiGRU DINOv3 0.7697, transformer DINOv3 0.7664, transformer LeVJEPA 0.7520. Blend search picked weights (fine-tuned 2, BiGRU DINOv3 1, transformer DINOv3 0, LeVJEPA LR 1, transformer LeVJEPA 1), threshold 0.70, held-out train F1 0.8235 (the earlier scratch blend v2: 0.8265), test cheat share 0.273.
+- The notebook output differs from the submitted blend v2 (`submission.csv`, public LB 0.8518237) on 42 of 1515 clips, and scores 0.8348 against `1.csv` (v2: 0.8342). The small differences come from the sequence models' random seeds and the PCA sample, so the weights chosen change slightly between runs. The notebook writes `submissions/main.csv` when run.

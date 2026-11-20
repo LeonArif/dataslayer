@@ -1,0 +1,1177 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "49dab9c5",
+   "metadata": {},
+   "source": [
+    "# Data Slayer 4.0 Legit No-Sequence Notebook\n",
+    "\n",
+    "Objective: Mengklasifikasikan setiap klip ujian berdurasi 1 detik (30 frame) menjadi normal (0) atau cheating (1) secara independen, hanya dari 30 frame klip itu sendiri dan pengetahuan data train (fitur DINOv3 dan pose), menggunakan F1-Macro sebagai metrik evaluasi."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "be959dcd",
+   "metadata": {},
+   "source": [
+    "# Sinkronisasi versi modules dan libraries"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "aabf16b7",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:23:40.012142Z",
+     "iopub.status.busy": "2026-11-19T04:23:40.012142Z",
+     "iopub.status.idle": "2026-11-19T04:23:51.253444Z",
+     "shell.execute_reply": "2026-11-19T04:23:51.252439Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Note: you may need to restart the kernel to use updated packages.\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "[notice] A new release of pip is available: 26.1.2 -> 26.3\n",
+      "[notice] To update, run: C:\\Users\\leouw\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\python.exe -m pip install --upgrade pip\n"
+     ]
+    }
+   ],
+   "source": [
+    "import sys\n",
+    "print(sys.version)\n",
+    "%pip install -q scikit-learn==1.8.0 numpy==2.4.4 pandas==2.3.3 matplotlib==3.10.9"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "c41d0a35",
+   "metadata": {},
+   "source": [
+    "# Import modules dan libraries"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "0af92cf0",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:23:51.255444Z",
+     "iopub.status.busy": "2026-11-19T04:23:51.255444Z",
+     "iopub.status.idle": "2026-11-19T04:23:58.762145Z",
+     "shell.execute_reply": "2026-11-19T04:23:58.761138Z"
+    }
+   },
+   "outputs": [],
+   "source": [
+    "from pathlib import Path\n",
+    "\n",
+    "import matplotlib.pyplot as plt\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "from sklearn.linear_model import LogisticRegression\n",
+    "from sklearn.metrics import f1_score\n",
+    "from sklearn.model_selection import StratifiedGroupKFold\n",
+    "from sklearn.pipeline import make_pipeline\n",
+    "from sklearn.preprocessing import StandardScaler\n",
+    "\n",
+    "SEED = 42\n",
+    "DATA = Path(\"../data\")\n",
+    "CACHE = Path(\"../cache/dinov3_hplus_224x400_step3_bf16\")\n",
+    "POSE_CACHE = Path(\"../cache/pose_vitpose\")\n",
+    "N_FOLDS = 5\n",
+    "STEPS_PER_CLIP = 10\n",
+    "SIDE_DELAY = 0.5\n",
+    "C_LR = 0.003\n",
+    "CHEAT_ACTIONS = [\"Looking_Under_the_Desk\", \"Reading_Hidden_Notes\", \"Repeated_Peeking\", \"Using_Smartwatch\"]\n",
+    "NOSE, LEYE, REYE, LEAR, REAR, LSH, RSH, LEL, REL, LWR, RWR = range(11)\n",
+    "np.random.seed(SEED)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "3742819d",
+   "metadata": {},
+   "source": [
+    "# Import datasets"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "50baba05",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:23:58.765572Z",
+     "iopub.status.busy": "2026-11-19T04:23:58.764569Z",
+     "iopub.status.idle": "2026-11-19T04:23:58.855628Z",
+     "shell.execute_reply": "2026-11-19T04:23:58.854613Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(416, 5) (1515, 2) (104,)\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>video</th>\n",
+       "      <th>label</th>\n",
+       "      <th>subject</th>\n",
+       "      <th>view</th>\n",
+       "      <th>action</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>cheat/subject_1/front_Looking_Under_the_Desk</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>front</td>\n",
+       "      <td>Looking_Under_the_Desk</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>cheat/subject_1/front_Reading_Hidden_Notes</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>front</td>\n",
+       "      <td>Reading_Hidden_Notes</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>cheat/subject_1/front_Repeated_Peeking</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>front</td>\n",
+       "      <td>Repeated_Peeking</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>cheat/subject_1/front_Using_Smartwatch</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>front</td>\n",
+       "      <td>Using_Smartwatch</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>cheat/subject_1/side_Looking_Under_the_Desk</td>\n",
+       "      <td>1</td>\n",
+       "      <td>1</td>\n",
+       "      <td>side</td>\n",
+       "      <td>Looking_Under_the_Desk</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "                                          video  label  subject   view  \\\n",
+       "0  cheat/subject_1/front_Looking_Under_the_Desk      1        1  front   \n",
+       "1    cheat/subject_1/front_Reading_Hidden_Notes      1        1  front   \n",
+       "2        cheat/subject_1/front_Repeated_Peeking      1        1  front   \n",
+       "3        cheat/subject_1/front_Using_Smartwatch      1        1  front   \n",
+       "4   cheat/subject_1/side_Looking_Under_the_Desk      1        1   side   \n",
+       "\n",
+       "                   action  \n",
+       "0  Looking_Under_the_Desk  \n",
+       "1    Reading_Hidden_Notes  \n",
+       "2        Repeated_Peeking  \n",
+       "3        Using_Smartwatch  \n",
+       "4  Looking_Under_the_Desk  "
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "rows = []\n",
+    "for path in sorted(DATA.glob(\"train/*/*/*.MOV\")):\n",
+    "    view, action = path.stem.split(\"_\", 1)\n",
+    "    rows.append({\n",
+    "        \"video\": f\"{path.parent.parent.name}/{path.parent.name}/{path.stem}\",\n",
+    "        \"label\": int(path.parent.parent.name == \"cheat\"),\n",
+    "        \"subject\": int(path.parent.name.split(\"_\")[1]),\n",
+    "        \"view\": view,\n",
+    "        \"action\": action,\n",
+    "    })\n",
+    "train = pd.DataFrame(rows)\n",
+    "sub = pd.read_csv(DATA / \"sample_submission.csv\")\n",
+    "eye = pd.read_csv(\"train_action_start_eye_all.csv\").set_index(\"video\")[\"start_eye\"]\n",
+    "print(train.shape, sub.shape, eye.shape)\n",
+    "train.head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "981cfb08",
+   "metadata": {},
+   "source": [
+    "# EDA"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "80ca97e1",
+   "metadata": {},
+   "source": [
+    "### Awal aksi di train\n",
+    "Detik saat subjek berhenti menulis dan mulai melakukan aksi cheating, dibaca manual dari video train kamera front. Kamera side merekam take yang sama dengan jeda sekitar 0,5 detik, jadi awal aksinya digeser 0,5 detik."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "1155691d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:23:58.858630Z",
+     "iopub.status.busy": "2026-11-19T04:23:58.857632Z",
+     "iopub.status.idle": "2026-11-19T04:23:58.909523Z",
+     "shell.execute_reply": "2026-11-19T04:23:58.909018Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "video cheating: 208 | awal aksi terbaca: 190 | tidak jelas: 18\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>count</th>\n",
+       "      <th>min</th>\n",
+       "      <th>50%</th>\n",
+       "      <th>max</th>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>action</th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>Looking_Under_the_Desk</th>\n",
+       "      <td>36.0</td>\n",
+       "      <td>6.25</td>\n",
+       "      <td>7.75</td>\n",
+       "      <td>8.75</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Reading_Hidden_Notes</th>\n",
+       "      <td>50.0</td>\n",
+       "      <td>5.25</td>\n",
+       "      <td>7.75</td>\n",
+       "      <td>9.25</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Repeated_Peeking</th>\n",
+       "      <td>52.0</td>\n",
+       "      <td>4.75</td>\n",
+       "      <td>7.75</td>\n",
+       "      <td>8.75</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Using_Smartwatch</th>\n",
+       "      <td>52.0</td>\n",
+       "      <td>6.25</td>\n",
+       "      <td>7.75</td>\n",
+       "      <td>8.75</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "                        count   min   50%   max\n",
+       "action                                         \n",
+       "Looking_Under_the_Desk   36.0  6.25  7.75  8.75\n",
+       "Reading_Hidden_Notes     50.0  5.25  7.75  9.25\n",
+       "Repeated_Peeking         52.0  4.75  7.75  8.75\n",
+       "Using_Smartwatch         52.0  6.25  7.75  8.75"
+      ]
+     },
+     "execution_count": 4,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "train[\"start\"] = [np.nan if not l else eye.get(v.replace(\"/side_\", \"/front_\"), np.nan) + (SIDE_DELAY if vw == \"side\" else 0.0)\n",
+    "                  for v, l, vw in zip(train[\"video\"], train[\"label\"], train[\"view\"])]\n",
+    "cheat = train[train[\"label\"] == 1]\n",
+    "print(f\"video cheating: {len(cheat)} | awal aksi terbaca: {cheat['start'].notna().sum()} | tidak jelas: {cheat['start'].isna().sum()}\")\n",
+    "cheat.groupby(\"action\")[\"start\"].describe()[[\"count\", \"min\", \"50%\", \"max\"]].round(2)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "6c3207cb",
+   "metadata": {},
+   "source": [
+    "# Aggregate\n",
+    "Setiap video train dipotong menjadi klip 1 detik (frame 0-29, 30-59, dst), sama seperti bentuk klip test, supaya model belajar dari satuan yang sama dengan yang diprediksi."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "c73ef759",
+   "metadata": {},
+   "source": [
+    "### Label per klip\n",
+    "Klip video cheating berlabel 1 jika sebagian besar klip ada setelah awal aksi, klip sebelum itu berlabel 0 karena subjek masih menulis. Video cheating yang awal aksinya tidak terbaca tidak dipakai karena label per detiknya tidak diketahui."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "6807ffaf",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:23:58.913039Z",
+     "iopub.status.busy": "2026-11-19T04:23:58.912034Z",
+     "iopub.status.idle": "2026-11-19T04:24:07.313169Z",
+     "shell.execute_reply": "2026-11-19T04:24:07.311151Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "klip train: 6166 | porsi cheating: 0.246\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th>second</th>\n",
+       "      <th>0</th>\n",
+       "      <th>1</th>\n",
+       "      <th>2</th>\n",
+       "      <th>3</th>\n",
+       "      <th>4</th>\n",
+       "      <th>5</th>\n",
+       "      <th>6</th>\n",
+       "      <th>7</th>\n",
+       "      <th>8</th>\n",
+       "      <th>9</th>\n",
+       "      <th>10</th>\n",
+       "      <th>11</th>\n",
+       "      <th>12</th>\n",
+       "      <th>13</th>\n",
+       "      <th>14</th>\n",
+       "      <th>15</th>\n",
+       "      <th>16</th>\n",
+       "      <th>17</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>porsi klip cheating</th>\n",
+       "      <td>0.0</td>\n",
+       "      <td>0.0</td>\n",
+       "      <td>0.0</td>\n",
+       "      <td>0.0</td>\n",
+       "      <td>0.0</td>\n",
+       "      <td>0.01</td>\n",
+       "      <td>0.04</td>\n",
+       "      <td>0.17</td>\n",
+       "      <td>0.44</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.48</td>\n",
+       "      <td>0.55</td>\n",
+       "      <td>0.66</td>\n",
+       "      <td>0.67</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "second                0    1    2    3    4     5     6     7     8     9   \\\n",
+       "porsi klip cheating  0.0  0.0  0.0  0.0  0.0  0.01  0.04  0.17  0.44  0.48   \n",
+       "\n",
+       "second                 10    11    12    13    14    15    16    17  \n",
+       "porsi klip cheating  0.48  0.48  0.48  0.48  0.48  0.55  0.66  0.67  "
+      ]
+     },
+     "execution_count": 5,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "pose_meta = pd.read_csv(POSE_CACHE / \"pose_train_s30_meta.csv\")\n",
+    "pose_kp = np.load(POSE_CACHE / \"pose_train_s30.npy\")\n",
+    "pose_box = np.load(POSE_CACHE / \"box_train_s30.npy\")\n",
+    "pose_meta[\"video\"] = [(\"cheat/\" if l == 1 else \"normal/\") + v.replace(\".MOV\", \"\") for v, l in zip(pose_meta[\"video\"], pose_meta[\"label\"])]\n",
+    "clip_rows, dino_clips, pose_clips = [], [], []\n",
+    "for r in train.itertuples():\n",
+    "    if r.label == 1 and np.isnan(r.start):\n",
+    "        continue\n",
+    "    frames = np.load(CACHE / \"train\" / (r.video.replace(\"/\", \"__\") + \".npy\")).astype(np.float32)\n",
+    "    idx = np.where(pose_meta[\"video\"] == r.video)[0]\n",
+    "    idx = idx[np.argsort(pose_meta[\"start\"].values[idx])]\n",
+    "    for c in range(min(len(frames) // STEPS_PER_CLIP, len(idx))):\n",
+    "        dino_clips.append(frames[c * STEPS_PER_CLIP:(c + 1) * STEPS_PER_CLIP])\n",
+    "        pose_clips.append((pose_kp[idx[c]], pose_box[idx[c]]))\n",
+    "        clip_rows.append({\"video\": r.video, \"subject\": r.subject, \"view\": r.view, \"action\": r.action, \"second\": c,\n",
+    "                          \"label\": int(r.label == 1 and c + 0.5 >= r.start)})\n",
+    "clips = pd.DataFrame(clip_rows)\n",
+    "print(\"klip train:\", len(clips), \"| porsi cheating:\", clips[\"label\"].mean().round(3))\n",
+    "clips.groupby(\"second\")[\"label\"].mean().round(2).to_frame(\"porsi klip cheating\").T"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "f1983a12",
+   "metadata": {},
+   "source": [
+    "# Feature Extraction"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "bd6a58ce",
+   "metadata": {},
+   "source": [
+    "### Fitur DINOv3 per klip\n",
+    "Fitur per frame DINOv3 ViT-H+ (CLS + rata-rata patch, 2560 dimensi, 10 frame per klip) dari baseline_cv.ipynb, diringkas menjadi satu vektor per klip:\n",
+    "- mean: apa yang terlihat selama klip.\n",
+    "- std dan selisih antar frame: seberapa banyak gambar berubah di dalam klip."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "85318828",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:24:07.316682Z",
+     "iopub.status.busy": "2026-11-19T04:24:07.315676Z",
+     "iopub.status.idle": "2026-11-19T04:24:10.418391Z",
+     "shell.execute_reply": "2026-11-19T04:24:10.417888Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(6166, 7680) (1515, 7680)\n"
+     ]
+    }
+   ],
+   "source": [
+    "def dino_vector(f):\n",
+    "    return np.concatenate([f.mean(0), f.std(0), np.abs(np.diff(f, axis=0)).mean(0)])\n",
+    "\n",
+    "\n",
+    "X_dino = np.stack([dino_vector(f) for f in dino_clips])\n",
+    "test_dino = np.load(CACHE / \"test.npy\").astype(np.float32)\n",
+    "X_dino_test = np.stack([dino_vector(f) for f in test_dino])\n",
+    "print(X_dino.shape, X_dino_test.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2524e34d",
+   "metadata": {},
+   "source": [
+    "### Fitur pose per klip\n",
+    "17 keypoint tubuh (ViTPose) di dalam box orang (RT-DETR) diubah menjadi 19 sinyal gerakan kepala, tangan, dan badan, lalu diringkas per klip dengan mean, std, dan rata-rata perubahan antar frame."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "30eae06a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:24:10.422407Z",
+     "iopub.status.busy": "2026-11-19T04:24:10.421403Z",
+     "iopub.status.idle": "2026-11-19T04:24:27.265729Z",
+     "shell.execute_reply": "2026-11-19T04:24:27.264713Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(6166, 57) (1515, 57)\n"
+     ]
+    }
+   ],
+   "source": [
+    "def pose_series(kp, box):\n",
+    "    h = box[:, 3:4] + 1e-6\n",
+    "    x, y, s = (kp[..., 0] - box[:, 0:1]) / h, (kp[..., 1] - box[:, 1:2]) / h, kp[..., 2]\n",
+    "    msx, msy = (x[:, LSH] + x[:, RSH]) / 2, (y[:, LSH] + y[:, RSH]) / 2\n",
+    "    sh_w = np.abs(x[:, LSH] - x[:, RSH]) + 1e-3\n",
+    "    d_l = np.hypot(x[:, LWR] - x[:, NOSE], y[:, LWR] - y[:, NOSE])\n",
+    "    d_r = np.hypot(x[:, RWR] - x[:, NOSE], y[:, RWR] - y[:, NOSE])\n",
+    "    return pd.DataFrame({\n",
+    "        \"head_yaw\": (x[:, NOSE] - (x[:, LEAR] + x[:, REAR]) / 2) / sh_w,\n",
+    "        \"head_down\": y[:, NOSE] - msy,\n",
+    "        \"eye_yaw\": (x[:, NOSE] - (x[:, LEYE] + x[:, REYE]) / 2) / sh_w,\n",
+    "        \"ear_vis\": s[:, LEAR] - s[:, REAR],\n",
+    "        \"wrist_gap\": np.hypot(x[:, LWR] - x[:, RWR], y[:, LWR] - y[:, RWR]),\n",
+    "        \"hand_face\": np.minimum(d_l, d_r),\n",
+    "        \"lwr_dx\": x[:, LWR] - msx, \"lwr_dy\": y[:, LWR] - msy,\n",
+    "        \"rwr_dx\": x[:, RWR] - msx, \"rwr_dy\": y[:, RWR] - msy,\n",
+    "        \"lel_dy\": y[:, LEL] - msy, \"rel_dy\": y[:, REL] - msy,\n",
+    "        \"wrist_score\": np.minimum(s[:, LWR], s[:, RWR]),\n",
+    "        \"lean_x\": msx, \"lean_y\": msy, \"sh_tilt\": y[:, LSH] - y[:, RSH], \"sh_w\": sh_w,\n",
+    "        \"head_speed\": np.r_[0, np.hypot(np.diff(x[:, NOSE]), np.diff(y[:, NOSE]))],\n",
+    "        \"hand_speed\": np.r_[0, (np.hypot(np.diff(x[:, LWR]), np.diff(y[:, LWR])) + np.hypot(np.diff(x[:, RWR]), np.diff(y[:, RWR]))) / 2],\n",
+    "    })\n",
+    "\n",
+    "\n",
+    "def pose_vector(kp, box):\n",
+    "    s = pose_series(kp, np.repeat(box[None], len(kp), 0))\n",
+    "    return np.nan_to_num(np.concatenate([s.mean(), s.std(), s.diff().abs().mean()]))\n",
+    "\n",
+    "\n",
+    "X_pose = np.stack([pose_vector(kp, box) for kp, box in pose_clips])\n",
+    "test_ids = pd.read_csv(POSE_CACHE / \"pose_test_meta.csv\")[\"id\"]\n",
+    "row_of_id = {i: k for k, i in enumerate(test_ids)}\n",
+    "test_kp, test_box = np.load(POSE_CACHE / \"pose_test.npy\"), np.load(POSE_CACHE / \"box_test.npy\")\n",
+    "X_pose_test = np.stack([pose_vector(test_kp[row_of_id[i]], test_box[row_of_id[i]]) for i in sub[\"id\"]])\n",
+    "print(X_pose.shape, X_pose_test.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2410fd8a",
+   "metadata": {},
+   "source": [
+    "# Classifier Models"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "945c3e04",
+   "metadata": {},
+   "source": [
+    "### Pembagian fold per subjek\n",
+    "Semua klip dari satu subjek berada di fold yang sama, sehingga skor validasi mengukur kemampuan model pada orang yang belum pernah dilihat."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "be3e2804",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:24:27.268730Z",
+     "iopub.status.busy": "2026-11-19T04:24:27.267730Z",
+     "iopub.status.idle": "2026-11-19T04:24:27.341563Z",
+     "shell.execute_reply": "2026-11-19T04:24:27.339758Z"
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>subjek</th>\n",
+       "      <th>klip</th>\n",
+       "      <th>cheating</th>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>fold</th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>5</td>\n",
+       "      <td>1211</td>\n",
+       "      <td>0.249</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>5</td>\n",
+       "      <td>1167</td>\n",
+       "      <td>0.238</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>5</td>\n",
+       "      <td>1159</td>\n",
+       "      <td>0.236</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>5</td>\n",
+       "      <td>1238</td>\n",
+       "      <td>0.261</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>6</td>\n",
+       "      <td>1391</td>\n",
+       "      <td>0.243</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "      subjek  klip  cheating\n",
+       "fold                        \n",
+       "0          5  1211     0.249\n",
+       "1          5  1167     0.238\n",
+       "2          5  1159     0.236\n",
+       "3          5  1238     0.261\n",
+       "4          6  1391     0.243"
+      ]
+     },
+     "execution_count": 8,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "clips[\"fold\"] = -1\n",
+    "splitter = StratifiedGroupKFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)\n",
+    "for fold, (_, val_idx) in enumerate(splitter.split(clips, clips[\"label\"], clips[\"subject\"])):\n",
+    "    clips.loc[val_idx, \"fold\"] = fold\n",
+    "clips.groupby(\"fold\").agg(subjek=(\"subject\", \"nunique\"), klip=(\"video\", \"count\"), cheating=(\"label\", \"mean\")).round(3)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "a127f00a",
+   "metadata": {},
+   "source": [
+    "### Logistic Regression DINOv3 + pose\n",
+    "Fitur DINOv3 dan pose digabung menjadi satu vektor per klip, lalu satu Logistic Regression memprediksi peluang cheating klip itu."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "682310c9",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:24:27.345112Z",
+     "iopub.status.busy": "2026-11-19T04:24:27.345112Z",
+     "iopub.status.idle": "2026-11-19T04:25:19.503881Z",
+     "shell.execute_reply": "2026-11-19T04:25:19.502872Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "F1-Macro per klip (threshold 0.5): 0.7405\n"
+     ]
+    }
+   ],
+   "source": [
+    "X = np.hstack([X_dino, X_pose])\n",
+    "X_test = np.hstack([X_dino_test, X_pose_test])\n",
+    "y = clips[\"label\"].values\n",
+    "\n",
+    "\n",
+    "def make_model():\n",
+    "    return make_pipeline(StandardScaler(), LogisticRegression(C=C_LR, max_iter=3000))\n",
+    "\n",
+    "\n",
+    "oof = np.zeros(len(clips))\n",
+    "for fold in range(N_FOLDS):\n",
+    "    tr, va = (clips[\"fold\"] != fold).values, (clips[\"fold\"] == fold).values\n",
+    "    oof[va] = make_model().fit(X[tr], y[tr]).predict_proba(X[va])[:, 1]\n",
+    "print(f\"F1-Macro per klip (threshold 0.5): {f1_score(y, oof > 0.5, average='macro'):.4f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "668702b3",
+   "metadata": {},
+   "source": [
+    "### Threshold\n",
+    "Threshold peluang cheating dipilih dari prediksi out-of-fold train yang memberi F1-Macro tertinggi."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "dc3e8141",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:25:19.507889Z",
+     "iopub.status.busy": "2026-11-19T04:25:19.506889Z",
+     "iopub.status.idle": "2026-11-19T04:25:19.602179Z",
+     "shell.execute_reply": "2026-11-19T04:25:19.601171Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "threshold terbaik 0.45 | F1-Macro per klip 0.7421\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>0.20</th>\n",
+       "      <th>0.25</th>\n",
+       "      <th>0.30</th>\n",
+       "      <th>0.35</th>\n",
+       "      <th>0.40</th>\n",
+       "      <th>0.45</th>\n",
+       "      <th>0.50</th>\n",
+       "      <th>0.55</th>\n",
+       "      <th>0.60</th>\n",
+       "      <th>0.65</th>\n",
+       "      <th>0.70</th>\n",
+       "      <th>0.75</th>\n",
+       "      <th>0.80</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>F1-Macro per klip</th>\n",
+       "      <td>0.6939</td>\n",
+       "      <td>0.7182</td>\n",
+       "      <td>0.7316</td>\n",
+       "      <td>0.7376</td>\n",
+       "      <td>0.7416</td>\n",
+       "      <td>0.7421</td>\n",
+       "      <td>0.7405</td>\n",
+       "      <td>0.7358</td>\n",
+       "      <td>0.7287</td>\n",
+       "      <td>0.7201</td>\n",
+       "      <td>0.7063</td>\n",
+       "      <td>0.6936</td>\n",
+       "      <td>0.678</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "                     0.20    0.25    0.30    0.35    0.40    0.45    0.50  \\\n",
+       "F1-Macro per klip  0.6939  0.7182  0.7316  0.7376  0.7416  0.7421  0.7405   \n",
+       "\n",
+       "                     0.55    0.60    0.65    0.70    0.75   0.80  \n",
+       "F1-Macro per klip  0.7358  0.7287  0.7201  0.7063  0.6936  0.678  "
+      ]
+     },
+     "execution_count": 10,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "thresholds = np.round(np.arange(0.2, 0.81, 0.05), 2)\n",
+    "scores = pd.Series({t: f1_score(y, oof > t, average=\"macro\") for t in thresholds}, name=\"F1-Macro per klip\")\n",
+    "THRESHOLD = scores.idxmax()\n",
+    "print(f\"threshold terbaik {THRESHOLD} | F1-Macro per klip {scores.max():.4f}\")\n",
+    "scores.round(4).to_frame().T"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "cc0a7f99",
+   "metadata": {},
+   "source": [
+    "### Skor per aksi dan per detik\n",
+    "Akurasi out-of-fold dipecah per aksi dan per posisi detik, untuk melihat bagian mana yang masih sulit."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "e8f12899",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:25:19.605658Z",
+     "iopub.status.busy": "2026-11-19T04:25:19.604659Z",
+     "iopub.status.idle": "2026-11-19T04:25:20.086789Z",
+     "shell.execute_reply": "2026-11-19T04:25:20.085781Z"
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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n0b37t3VCb+HhweioqLUIifoJZET+WeeeQbfffcdtm3bhtatW5e6n/Jze/bsiYcffhizZs1SQUdJ+0VEROXDNCEiIiuRnJyM+fPnY/Hixbj99tvVukWLFiEwMLBgm8jISCxYsEDd1q1bV62Tk/3Vq1er9dOnT4enp6c6Offz8yv1Z2ZlZWHUqFE4cOAAtm/frq7ql2bHjh2455578MYbb+Cll14yeL+IiKjsGAwQEVkJSbvJyMhQ6TX5ateujaZNmxY8Pnz4MLKzs9GkSZMir5UUHS8vrzL/zBdeeAFOTk7YtWsXvL29S91eTvYHDBiA//3vf0U6HBmyX5L6lE8CkDlz5pR5f4mIrA2DASIiKjJ6YGdnh3379qnbwgqfbBtKTuyXLFmCNWvW4JFHHjGoCFmu/MtrHnvsMZWOZOh+HTx4sGBd/uuIiKhkDAaIiKxESEgIHBwcsHv3btSvX1+tu379Ok6dOoXevXurx+3atVNX4GNjY9GrVy+d7+Po6Ki2McSQIUMwePBglfsvJ/EjR44scXsXFxf89ddfuPvuu3HnnXequgZ3d3eD9qtRo0YG7RMREd3EAmIiIishV9DHjx+viog3btyII0eOYOzYsbC1vfmnQNJw5Aq+dBz67bffEB4ejrCwMMyYMQMrV64s6BokV+o3bNiAuLg4pKamlvhzhw0bhu+//151IVq2bFmp+ymdguRn2dvb46677lI/y5D9IiKismMwQERkRWbOnKmurMvV+v79+6uOPR06dCiyjRTkykm3FO9KPcHQoUPVhGL5ownSUeipp57CiBEjVFrPhx9+WOrPfeCBB1Sx8qOPPqpO5g0JXP7++2/ViWjQoEGqJWpp+0VERGVnkyvftEREREREZHU4MkBEREREZKUYDBARERERWSkGA0REREREVorBABERERGRlWIwQERERERkpRgMEBERERFZKQYDRERERERWisEAEREREZGVYjBARERERGSlGAwQEREREVkpBgNERERERFaKwQAREREREazT/wNIFQg0LXfmOQAAAABJRU5ErkJggg==",
+      "text/plain": [
+       "<Figure size 900x300 with 1 Axes>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th>view</th>\n",
+       "      <th>front</th>\n",
+       "      <th>side</th>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>action</th>\n",
+       "      <th></th>\n",
+       "      <th></th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>Checking_Smartwatch</th>\n",
+       "      <td>0.864</td>\n",
+       "      <td>0.910</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Looking_Around</th>\n",
+       "      <td>0.787</td>\n",
+       "      <td>0.905</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Looking_Under_the_Desk</th>\n",
+       "      <td>0.895</td>\n",
+       "      <td>0.877</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Reading_Hidden_Notes</th>\n",
+       "      <td>0.780</td>\n",
+       "      <td>0.698</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Repeated_Peeking</th>\n",
+       "      <td>0.691</td>\n",
+       "      <td>0.622</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Thinking</th>\n",
+       "      <td>0.899</td>\n",
+       "      <td>0.929</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Using_Smartwatch</th>\n",
+       "      <td>0.792</td>\n",
+       "      <td>0.685</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>Writing_Answers</th>\n",
+       "      <td>0.887</td>\n",
+       "      <td>0.872</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "view                    front   side\n",
+       "action                              \n",
+       "Checking_Smartwatch     0.864  0.910\n",
+       "Looking_Around          0.787  0.905\n",
+       "Looking_Under_the_Desk  0.895  0.877\n",
+       "Reading_Hidden_Notes    0.780  0.698\n",
+       "Repeated_Peeking        0.691  0.622\n",
+       "Thinking                0.899  0.929\n",
+       "Using_Smartwatch        0.792  0.685\n",
+       "Writing_Answers         0.887  0.872"
+      ]
+     },
+     "execution_count": 11,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "clips[\"pred\"] = (oof > THRESHOLD).astype(int)\n",
+    "clips[\"benar\"] = clips[\"pred\"] == clips[\"label\"]\n",
+    "fig, ax = plt.subplots(figsize=(9, 3))\n",
+    "for view, g in clips.groupby(\"view\"):\n",
+    "    ax.plot(g.groupby(\"second\")[\"benar\"].mean(), marker=\"o\", label=view)\n",
+    "ax.set_xlabel(\"detik ke-\")\n",
+    "ax.set_ylabel(\"akurasi klip\")\n",
+    "ax.legend()\n",
+    "plt.show()\n",
+    "clips.pivot_table(index=\"action\", columns=\"view\", values=\"benar\", aggfunc=\"mean\").round(3)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "5347f639",
+   "metadata": {},
+   "source": [
+    "# Submission\n",
+    "Model dilatih ulang pada semua klip train, lalu setiap klip test diprediksi sendiri dari 30 frame-nya, tanpa informasi dari klip test lain."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "c7d936d4",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-11-19T04:25:20.089846Z",
+     "iopub.status.busy": "2026-11-19T04:25:20.089342Z",
+     "iopub.status.idle": "2026-11-19T04:25:31.799662Z",
+     "shell.execute_reply": "2026-11-19T04:25:31.798344Z"
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "porsi klip cheating: 0.189\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "<div>\n",
+       "<style scoped>\n",
+       "    .dataframe tbody tr th:only-of-type {\n",
+       "        vertical-align: middle;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe tbody tr th {\n",
+       "        vertical-align: top;\n",
+       "    }\n",
+       "\n",
+       "    .dataframe thead th {\n",
+       "        text-align: right;\n",
+       "    }\n",
+       "</style>\n",
+       "<table border=\"1\" class=\"dataframe\">\n",
+       "  <thead>\n",
+       "    <tr style=\"text-align: right;\">\n",
+       "      <th></th>\n",
+       "      <th>id</th>\n",
+       "      <th>label</th>\n",
+       "    </tr>\n",
+       "  </thead>\n",
+       "  <tbody>\n",
+       "    <tr>\n",
+       "      <th>0</th>\n",
+       "      <td>test_seq_00001</td>\n",
+       "      <td>0</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>1</th>\n",
+       "      <td>test_seq_00002</td>\n",
+       "      <td>0</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>2</th>\n",
+       "      <td>test_seq_00003</td>\n",
+       "      <td>0</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>3</th>\n",
+       "      <td>test_seq_00004</td>\n",
+       "      <td>0</td>\n",
+       "    </tr>\n",
+       "    <tr>\n",
+       "      <th>4</th>\n",
+       "      <td>test_seq_00005</td>\n",
+       "      <td>0</td>\n",
+       "    </tr>\n",
+       "  </tbody>\n",
+       "</table>\n",
+       "</div>"
+      ],
+      "text/plain": [
+       "               id  label\n",
+       "0  test_seq_00001      0\n",
+       "1  test_seq_00002      0\n",
+       "2  test_seq_00003      0\n",
+       "3  test_seq_00004      0\n",
+       "4  test_seq_00005      0"
+      ]
+     },
+     "execution_count": 12,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "model = make_model().fit(X, y)\n",
+    "test_proba = model.predict_proba(X_test)[:, 1]\n",
+    "Path(\"submissions\").mkdir(exist_ok=True)\n",
+    "submission = pd.DataFrame({\"id\": sub[\"id\"], \"label\": (test_proba > THRESHOLD).astype(int)})\n",
+    "submission.to_csv(\"submissions/main_legit_nosequence.csv\", index=False)\n",
+    "print(\"porsi klip cheating:\", submission[\"label\"].mean().round(3))\n",
+    "submission.head()"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.10"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
