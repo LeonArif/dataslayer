@@ -6,13 +6,22 @@ Ideas we have discussed but not run.
 When one is tried, delete it from this list and write its result as a normal dated entry below.
 Last updated 2026-11-20.
 
-Planned for the next session:
+Planned for the next session (added 2026-11-21 evening, in this order):
+- Augmentation tuning first: single-token ablation inside hide and weather, the quality add-on (stopped at step 100), a seed repeat of hide + weather + hflip.
+- Short screens of the fine-tune recipe with the winning augmentation (fold 0, about 14 to 17 min each): 1 against 2 epochs, K=8 (K=16 was not better, K=20 untried), one learning-rate change.
+- B without the logistic regression: the head-only B (the fine-tuned model's own cheat probability, no LR, no pose) scored 0.8617 public from one fold-0 Kaggle model, against 0.8472 with LR + pose. Test the middle cases on held-out data: LR on the fine-tuned features without pose, and head probability with pose added; use the head probability as B in the next fine-tune test.
+- Fine-tuned features into the sequence heads (BiGRU and transformer on the fine-tuned per-frame features) and compare with the frozen + sequence head (E). If the fine-tuned version is not better, bring the frozen A (frozen DINOv3 + logistic regression + pose, weight 0 in v2) back into the blend search with B, D and E and re-check its weight.
+- The downloaded video models (V-JEPA 2 ViT-g, VideoMAE v2 giant, InternVideo-Next Large): read the custom code, extract on all 30 frames, logistic regression and sequence heads, blend check.
+- Final Kaggle fine-tune (5 folds, best recipe, minimal notebook `kaggle_15fps_aug/kaggle_finetune_15fps_aug_folds1to4.ipynb`) postponed by the user to near the end of the competition.
 - Fine-tune more unfrozen ViT-H+ blocks on 30-frame clips: 16, then 20 only if 16 is better, and keep going until the score stops improving. Past 20 blocks needs a cache from an earlier block than 12 and LoRA or a lighter optimizer.
-- Augment the train images (colour changes, small crops, blur, JPEG recode in the test format). A horizontal flip needs a check first, because the left and right hand matter.
+- Augment the train images: screening is queued (see the 2026-11-20 entry on the augmentation screen). Still open after the screen: a full 5-fold run with the winning augmentations, and whether the test frames need any change.
 - Use the best fine-tuned backbone as the main DINOv3 feature extractor, also for the sequence models (E3 and E5 would read fine-tuned per-frame features instead of frozen ones). Choice to make: all 30 train frames (about 2 h) or every 3rd frame for train with 3 interleaved sets of 10 at test.
 - Rerun the blend with the 30-frame fine-tuned B (it replaces the old B and the frozen A).
 - Fine-tune LeVJEPA (the video model) instead of using it frozen. Heavier than ViT-H+: 30 frames of 196 patches are about 5,900 tokens per clip, so caching a middle layer would take tens of GB; probably needs fewer frames or only the top blocks. The sequence head on frozen LeVJEPA is already done (E5).
 - More frozen video models as extra blend members, using the same recipe as LeVJEPA (all 30 frames, per-frame vector or clip vector, logistic regression and sequence head). Candidates to check for availability and frame-count limits on the 8 GB GPU: V-JEPA 2, VideoMAE and VideoMAE v2, TimeSformer, Video Swin. Video-language models are not allowed, so no text-aligned ones.
+
+Newer backbones (check when public weights exist):
+- DINOv4 is only a guess in a LinkedIn post (2026-11-20), nothing official. JEM (Joint-Embedding Multi-view, arxiv 2610.10013, a 7B model, said to match DINOv3) is a possible successor but is far too big for the 8 GB GPU unless a small version with public weights appears. If either comes out in a size that fits, test it as the frozen backbone and as the fine-tune base.
 
 Teacher-student and context ideas:
 - Soft labels from the whole-video teacher on the sequence models (E3 and E5). Only tried on the logistic regression (C1, no gain).
@@ -20,6 +29,7 @@ Teacher-student and context ideas:
 - Copying the teacher's per-person-centred features: the student learns to guess what the whole-video teacher computes.
 
 Smaller ideas:
+- B with honest features for training: today B trains its logistic regression on the fold backbone's features of the 80% clips that backbone was trained on (memorised, cleaner than test features) and scores the held-out 20%. Alternative: take each clip's features from the fold model that never saw it (out-of-fold features for all 6,166 clips), train the logistic regression on those, and for test average the 5 models' features or predictions. Expected: the regression learns the right level of trust in the features.
 - Stacking (a logistic regression on the members' scores) instead of the weight grid in the blend.
 - Tuning E's own settings (PCA size, hidden size, epochs, dropout); each was run at one setting only.
 - A LightGBM head on the LeVJEPA features as in Owen's baseline (D1 used a logistic regression).
@@ -1384,3 +1394,176 @@ Same pipeline with the start search limited to 4.25-9.25 s (scratch `legit_agree
 - Known limit: the fine-tuned member uses 2 of the 30 frames of every test clip, to be replaced by the 30-frame fine-tune.
 - Verification run of the notebook code from top to bottom (output redirected to a temporary folder, nothing written to `submissions/`): the members score (F1-Macro per clip at threshold 0.5) fine-tuned + pose 0.7872, LeVJEPA + pose 0.7212, BiGRU DINOv3 0.7697, transformer DINOv3 0.7664, transformer LeVJEPA 0.7520. Blend search picked weights (fine-tuned 2, BiGRU DINOv3 1, transformer DINOv3 0, LeVJEPA LR 1, transformer LeVJEPA 1), threshold 0.70, held-out train F1 0.8235 (the earlier scratch blend v2: 0.8265), test cheat share 0.273.
 - The notebook output differs from the submitted blend v2 (`submission.csv`, public LB 0.8518237) on 42 of 1515 clips, and scores 0.8348 against `1.csv` (v2: 0.8342). The small differences come from the sequence models' random seeds and the PCA sample, so the weights chosen change slightly between runs. The notebook writes `submissions/main.csv` when run.
+
+## 2026-11-20 - Next-session plan started: new fine-tune pipeline (ft2) for 16+ blocks
+
+- Why a new pipeline: the old block-20 token cache caps the depth at 12 trained blocks, cannot take image augmentation, and was built from raw video frames. New design: train frames (every 15th frame, 13,521 frames, same rows as the old cache) passed through the test delivery format (640x360, JPEG q90) and stored as uint8 400x224 RGB (`cache/ft_frames_testfmt/`, 3.9 GB, `scripts/ft2_frames.py`); the first 32-K blocks are frozen and run on the fly, so any K and optional augmentation work (`scripts/ft2_train.py`).
+- Memory: trainable blocks use bitsandbytes 8-bit AdamW (one optimizer per tensor) stepped inside the backward pass with gradient checkpointing, so gradients are not stored and there is no gradient clipping (the old runs clipped at 1.0 and used fp32 AdamW). K=16 (419.8M trainable block parameters) peaks at 5.09 GB at about 10 frames per second (benchmark, 25 steps); K=20 or 24 should fit.
+- Weights of the trained blocks and norm are saved for every fold (fp16), plus the features of all train frames from each fold backbone. Test side (`scripts/ft2_infer_test.py`): all 30 frames of every test sequence, the frozen blocks once, then each fold's trained blocks; the logistic regression on 2-frame summaries sees the 30 frames as 15 interleaved pairs (frame i and i+15) whose probabilities are averaged.
+- Augmentation (off in the first run, flag AUG=1): brightness, contrast, saturation +-20%, zoom in to 85%, shift 5%, rotation 3 degrees, blur on half of the batch; no flip.
+- Run 1: K=16, 2 epochs, no augmentation, `cache/ft2/k16/`. Comparison point: old 12-block member B, held-out train F1 0.7889 (but its pipeline differs: raw frames, fp32 AdamW with clipping), so if 16 is not clearly better a 12-block run in the new pipeline is the fair baseline.
+- Run 1 result (K=16, trained 5 folds, about 26-30 min per fold, peak 5.98 GB): held-out frame accuracy per fold 0.670, 0.676, 0.604, 0.597, 0.680. Member B (LR on the 2-frame features + 30-frame pose) held-out clip F1 **0.7821** (threshold 0.6; 0.7807 at 0.5), vs the old 12-block B 0.7889. So 16 blocks in the new pipeline is not better than the old 12. Test side for k16 not run yet (weights are saved, `python scripts/ft2_infer_test.py 16 k16` takes about 1 h). K=20 is not tried, because the plan says to go deeper only if 16 is better.
+- Run 2 (done): K=12 in the same new pipeline, 2 epochs, no augmentation, `cache/ft2/k12/`, to separate the effect of block count from the effect of the pipeline change (test-format frames, 8-bit AdamW, no gradient clipping).
+
+## 2026-11-20 - Augmentation screen on fold 0 (queued, results below when done)
+
+- Why a screen: a full 5-fold run takes about 2 h, so 40 augmentations at 5 folds are not possible. Each screen run trains the K=12 backbone on fold 0 only (same 2 epochs, same recipe as run 2), predicts only the held-out frames of that fold (no weights, no full feature pass; a throwaway run, a chosen setting is re-run on 5 folds with weights saved), about 16 min each.
+- Score of a screen run (`scripts/ft2_screen_score.py`): the head's own cheat probability (sum of the 4 cheat classes) averaged over the clip's 2 frames, vs the clip label on the 1,364 clips of fold 0: AUC and macro F1. It is a proxy for member B (which adds a logistic regression and pose), good enough to rank augmentations. The no-augmentation reference is fold 0 of run 2 (`cache/ft2/k12`); a second no-augmentation run with another training seed (TSEED=1042) measures the seed noise, so only differences clearly bigger than that count.
+- All augmentations are tokens in `scripts/ft2_augs.py` (env `AUG`, groups or single tokens). Implemented: geometry (zoom, shift, rot 4 deg, shear, persp, elastic, crop, hflip), photometric (bright, contrast, sat, hue, gamma, gray, autocontrast, posterize, equalize), quality (blur, motion, noise, sp = salt and pepper, jpeg, downup, sharpen, patch = glare or shadow blob), hiding (erase, cutout, griddrop, coarse), mixing (mixup, cutmix on half of the batches, soft labels), weather (fog, shadow, flare, rain, snow). Skipped on purpose: vertical flip and 90 degree rotation (the camera is fixed and upright), invert / solarize and channel shuffle (colours never look like that), mosaic and copy-paste (object detection only).
+- Stage 1 (queued, in order): seed noise, then each group on its own (geo, photo, quality, hide, mix, weather), then hflip alone (it needs a check because left and right hand matter). Stage 2: single tokens inside the groups that help or are neutral. Stage 3: best combination on 5 folds.
+- Run 2 result (K=12, new pipeline, no augmentation, `cache/ft2/k12/`, about 23 min per fold, peak 5.0 GB): held-out frame accuracy per fold 0.665, 0.661, 0.541, 0.582, 0.663. Member B held-out clip F1 **0.7820** (threshold 0.6; 0.777 at 0.5), the same as K=16 (0.7821) and 0.007 below the old 12-block B (0.7889). So in the new pipeline 12 and 16 blocks score the same, and the small gap to the old B comes from the pipeline change (test-format frames, 8-bit AdamW, no clipping) or from noise, not from the block count. K=20 stays untried. Test pass for k12 not run yet.
+- Seed-noise result (fold 0, K=12, no augmentation, training seed 1042 vs 42): AUC 0.8483 vs 0.8495, F1 at the best threshold 0.752 vs 0.7645, F1 at 0.5 0.7365 vs 0.7615. So AUC moves by about 0.001 between seeds but F1 by 0.01 to 0.025. The augmentation screen therefore judges on AUC first (a change under about 0.005 is noise) and treats F1 as secondary.
+
+## 2026-11-20 - Training on all 30 frames per second (random frame per half second each epoch)
+
+- Question raised: the K=12 / K=16 fine-tunes only saw 2 frames per second (every 15th frame), not 30. A fine-tune on every frame would be about 14 times more images (about 28 h for 5 folds), so instead each epoch draws ONE RANDOM labelled frame out of the 15 in each half second: same number of images and training time as before, but across epochs the backbone sees many different frames.
+- New files: `scripts/ft2_frames_all.py` (every frame of every train video in the test format, 200,789 rows, 54 GB, `cache/ft_frames_testfmt/train_frames_all.npy` + `train_meta_all.csv`) and the env flag `ALLFRAMES=1` in `scripts/ft2_train.py`. The held-out / feature pass still uses the every-15th-frame rows, so member B and the test pass are unchanged.
+- Fold-0 screen queued (K=12, no augmentation, `aug_allframes`), compared with `k12` and `aug_seed2` by AUC.
+- Memory stop (2026-11-20): the system killed the augmentation screen queue, the frame extraction (done 60 of 416 videos, resumable) and the waiting queues because RAM ran low (a training run and the 54 GB extraction were running together). Nothing was restarted by itself. From now on jobs run one at a time in this order, as asked: (1) K=12 test inference, (2) fine-tune with all frames (extraction, then the fold-0 run), (3) augmentation screens (the geometry run was cut at step 100 and starts from the beginning).
+- K=12 test inference started (`python scripts/ft2_infer_test.py 12 k12`, all 30 test frames, 5 fold backbones, about 40 min).
+
+## 2026-11-20 - Kaggle fine-tune notebook (15 frames per second)
+
+- New notebook `leon/kaggle_finetune_15fps.ipynb` (simple-notebook style, self-contained, nothing else from the repo is needed): reads the train videos from `/kaggle/input`, recodes every 2nd frame (15 fps, plus every 15th frame for evaluation) to the test format (640x360, JPEG q90) and keeps the JPEG bytes in RAM, labels the frames like `ft2_train.py`, fine-tunes the top K=12 blocks of DINOv3 ViT-H+ plus an 8-action head, and saves weights, hold-out predictions and features.
+- Config cell: K, FPS, EPOCHS, HOLDOUT_FOLD (0 = train on folds 1-4 and score fold 0, comparable with the local screen; None = 100% of train), TIME_BUDGET_H (total session limit, default 8.5 h). A 15-step benchmark at learning rate 0 measures the GPU speed and the number of steps is cut so the run, evaluation and features fit in the budget; weights are saved every 500 steps.
+- Differences from the local recipe: standard fp32 AdamW with gradient clipping 1.0 (the old pipeline's recipe) instead of the 8-bit AdamW without clipping, because Kaggle GPUs have 16 GB. Uses bf16 autocast on GPUs with compute capability 8 or more, otherwise fp16 with a gradient scaler (P100 / T4 have no bf16); the frozen blocks fall back to fp32 if fp16 gives infinite values.
+- The fold table (video, fold, action, by-eye start, label) is pasted in the notebook so the folds match the local ones; the clip label rule was checked against `clips.csv` (6,166 of 6,166 equal). The frame extraction and labels were checked on 3 local videos against the local `train_meta.csv` (same frames, same seconds). The GPU part (model, training, evaluation) is not tested yet because the GPU is busy.
+- Outputs (about 0.65 GB of weights per model, plus a few MB): `<tag>_weights.pt` (same format as the local fold weights), `_head.pt`, `_val_logprobs.npy` + `_val_meta.csv`, `_feat.npy` + `_feat_meta.csv`, `_summary.json`.
+- Needs on Kaggle: GPU on, Internet on (pip install of timm 1.0.29), the competition data added, and the DINOv3 weights as a dataset (file `model.safetensors`, 3.2 GB, from the local Hugging Face cache) or a Hugging Face token in Kaggle secrets named HF_TOKEN.
+- Found while checking the slow test inference: the killed augmentation queue left its geometry screen run (`ft2_train.py 12 2`) alive as a stray process, so it shared the GPU with the K=12 test inference (about 290 s per chunk of 32 sequences instead of the expected 40 s).
+
+
+## 2026-11-20 - ft2 K=12 test inference (all 30 frames) and blend v2 with the new B
+
+- Test inference of the K=12 fine-tuned backbone (5 folds, all 30 frames of the 1515 test sequences, features 5 x 1515 x 30 x 2560) finished: 4964 s total (part of it shared the GPU with a stray screen run, see the entry above).
+- Member B (LR on 2-frame summaries + 30-frame pose, test side = 15 interleaved frame pairs averaged, then 5 folds): held-out train F1 0.782 (thr 0.6), test vs `1.csv` 0.7446 (cheat share 0.157). The old 12-block B scored 0.7889 held-out and 0.806 vs `1.csv`, so the new B is worse on both sides.
+- Blend with the same pipeline as v2 (rank average, weights in {0,1,2} and threshold from held-out train, members E3 BiGRU, E3 transformer, D1, E5 transformer), only B swapped:
+  - old B12 (v2): held-out F1 0.8265 (weights 2/1/1/1/1, thr 0.70), AUC 0.9225, vs `1.csv` 0.8342.
+  - new B ft2 K=12: held-out F1 0.8227 (weights 2/0/1/1/1, thr 0.70), AUC 0.9150, vs `1.csv` 0.8365, cheat share 0.246.
+- Result: the new B does not improve the blend (held-out 0.8227 vs 0.8265). The vs `1.csv` check is about equal (0.8365 vs 0.8342). File written for the comparison: `submissions/blend_v2_ft2B_k12.csv` (not submitted). K=16 was not run on test (held-out blend with K=16 was 0.8191).
+- Next: augmentation screens (fold 0, K=12), one run at a time.
+
+## 2026-11-20 - Public leaderboard result of blend v2 with the new B (ft2 K=12)
+
+- Submitted by the user: `submissions/blend_v2_ft2B_k12.csv` got public LB 0.8408476, worse than blend v2 with the old B (0.8518237), a drop of 0.0110.
+- This agrees with the held-out train score (0.8227 new vs 0.8265 old) and with B alone on `1.csv` (0.7446 new vs 0.806 old). The blend-level check against `1.csv` (0.8365 vs 0.8342) pointed the wrong way, so it is too small a difference to trust (about 3 clips).
+- Conclusion: the K=12 fine-tune trained on 2 frames per second does not replace the old 12-block B. The old B stays in the blend.
+
+## 2026-11-20 - E with a text transformer (RoBERTa / DeBERTa) as the sequence head
+
+- Script `e_bert.py` (scratchpad): same input as E3 (clip-mean-centred DINOv3 PCA-128 frames + 19 pose signals, 30 frames per clip), each frame vector projected (dropout 0.2, linear, LayerNorm) to the encoder width and given as `inputs_embeds`; mean + max pooling over the 30 outputs, dropout 0.3, linear. Encoder learning rate 2e-5, projection and head 1e-3 (one-cycle), AdamW weight decay 0.05, input noise 0.1, batch 64, 6 epochs, 1 seed, bf16 autocast, gradient clip 1.0. Same folds as the other members. About 4 to 5 min per model for the 5 folds.
+- Held-out train per clip F1 / AUC, test vs `1.csv` F1 (clips wrong), test cheat share:
+  - E3 transformer (reference, 3 seeds, 25 epochs): 0.7731 / 0.8574 / 0.7428; E3 BiGRU: 0.7722 / 0.8516 / 0.7617.
+  - roberta-base, random weights (control, same architecture): 0.7661 / 0.8484 / 0.7469 (298), 0.244.
+  - roberta-base, pretrained text weights: 0.7381 / 0.8066 / 0.7565 (277), 0.217.
+  - deberta-v3-base, pretrained: 0.705 / 0.7977 / 0.7252 (331), 0.263.
+- Result: no gain. The pretrained text weights hurt (RoBERTa AUC 0.8484 with random weights against 0.8066 pretrained), and the large model with random weights only matches the small E3 transformer. Not added to the blend. Not tried: these heads on the LeVJEPA frames (E5 input).
+- Notes: the first DeBERTa runs gave NaN or a dtype error because transformers 5 loads the DeBERTa checkpoint in fp16 by default; fixed with `dtype=torch.float32` in `from_pretrained` (RoBERTa is stored in fp32, unaffected). Member files `members/E_<model>_<pre|scratch>_{oof,test}.npy`.
+
+## 2026-11-20 - Augmentation screens, fold 0 (K=12, 2 epochs, held-out frames only)
+
+- Metric: clip AUC from the head's cheat probability averaged over the clip's 2 frames (`ft2_screen_score.py`). Baselines on the same fold: `k12` 0.8495 (F1 at best threshold 0.7645) and `aug_seed2` 0.8483 (0.752).
+- geo (zoom, shift, rot, shear, persp, elastic, all on): AUC 0.8476, F1 best 0.7917: no gain.
+- photo (bright, contrast, sat, hue, gamma, gray, autocontrast, posterize, equalize, all on): AUC 0.8613, F1 best 0.7919: the only clear gain so far (+0.012 AUC, seed noise about 0.001).
+- quality (blur, motion, noise, sp, jpeg, downup, sharpen, patch): trained (about 17 min) but not scored yet; the scoring script reads `cache/ft_frames_testfmt/train_meta.csv`, which was deleted by the user together with `train_frames_all.npy`.
+- hide, mix, weather, hflip: not run, they crashed at start for the same missing `train_meta.csv`. `train_frames.npy` is still there. Waiting for the decision to rebuild `train_meta.csv` with `ft2_frames.py`.
+
+## 2026-11-20 - Augmentation group screens finished (fold 0, K=12, 2 epochs, all tokens of a group on)
+
+- `cache/ft_frames_testfmt/train_meta.csv` was deleted by the user together with the unused 51 GB all-frames file; rebuilt by copying `cache/ft_hplus_block20/train_meta.csv` (same 13,521 rows, row numbers 0 to 13520, 416 videos). Checked by re-extracting 9 frames from 3 videos (first, middle, last of each) and comparing with `train_frames.npy`: all 9 identical. The hide, mix, weather and hflip runs had crashed at start for the missing file and were rerun.
+- Same fold-0 setup for every row (1,364 clips; AUC primary, seed noise about 0.001; F1 at best threshold is optimistic and noisier, 0.01 to 0.025). One run per group, 16 to 17 min each:
+
+| Run | AUC | F1 at 0.5 | F1 at best thr | thr |
+|---|---|---|---|---|
+| k12 (no augmentation) | 0.8495 | 0.7615 | 0.7645 | 0.725 |
+| aug_seed2 (no augmentation, other seed) | 0.8483 | 0.7365 | 0.7520 | 0.65 |
+| geo (zoom, shift, rot, shear, persp, elastic) | 0.8476 | 0.7693 | 0.7917 | 0.625 |
+| photo (bright, contrast, sat, hue, gamma, gray, autocontrast, posterize, equalize) | 0.8613 | 0.7736 | 0.7919 | 0.675 |
+| quality (blur, motion, noise, sp, jpeg, downup, sharpen, patch) | 0.8591 | 0.7543 | 0.7987 | 0.75 |
+| hide (erase, cutout, griddrop, coarse) | 0.8730 | 0.7627 | 0.7871 | 0.725 |
+| mix (mixup, cutmix) | 0.8661 | 0.7340 | 0.7802 | 0.80 |
+| weather (fog, shadow, flare, rain, snow) | 0.8721 | 0.7543 | 0.7806 | 0.65 |
+| hflip (horizontal flip alone) | 0.8650 | 0.7626 | 0.7825 | 0.625 |
+
+- Result: every group except geo gains in AUC (+0.011 to +0.024 over the two no-augmentation runs); hide (0.8730) and weather (0.8721) are the best, then mix 0.8661, hflip 0.8650, photo 0.8613, quality 0.8591. Geo gives no gain. Horizontal flip alone already gives +0.016.
+- Not run yet: stage 2 (single token or leave-one-out inside each helpful group) and stage 3 (best combination on all 5 folds, weights saved, then test inference). Not tried: `crop` and other geometric tokens individually, channel shuffle / invert (skipped on purpose).
+
+## 2026-11-20 - Timestral (frozen), and blend v2 with the old B rewritten for the day's submission
+
+- Timestral-209M frozen (`e_timestral.py`): each clip as a 30-step series (first 32 PCA components of the clip-mean-centred DINOv3 frames + 19 pose signals, left-padded to one 32-step patch, all variates of a clip in one group), last-layer hidden states (encoder token mean, forecast-query token mean and max over variates) + log std of every variate, standardised, logistic regression. Held-out F1 by C: 0.0003 0.6523, 0.001 0.6603, 0.003 **0.6637**, 0.01 0.6576; test vs `1.csv` 0.68 (378 wrong), cheat share 0.247. Far below E3 (0.772). Feature extraction 147 s. Library installed from a local copy of the open-source repo (`pip install --no-deps`), code read first (no network or exec calls besides the Hugging Face download).
+- Timestral-28M fine-tuned as the sequence head (all weights + linear head trained, `e_timestral_ft.py`, 6 epochs, 1 seed): started, result not in yet.
+- `submissions/blend_v2_oldB.csv`: blend v2 rebuilt from the saved members (old B12 x2, E3 BiGRU, E3 transformer, D1, E5 transformer, threshold 0.70; held-out F1 0.8265, test vs `1.csv` 0.8342, cheat share 0.251, same numbers as the logged v2). `submissions/submission.csv` currently holds the ft2 K=12 blend (public LB 0.8408).
+
+- Timestral-28M fine-tuned as the sequence head (`e_timestral_ft.py`: all Timestral weights lr 2e-5 + linear head lr 1e-3 on [encoder-token mean, forecast-token mean and max over variates, log std of every variate], same 30-step series as the frozen run, 6 epochs, 1 seed, fp32, 5 folds, about 34 min): held-out F1 0.6444 (thr 0.40), AUC 0.7305; test vs `1.csv` 0.6877 (371 wrong), cheat share 0.251. Worse than the frozen 209M + logistic regression (0.6637 / AUC 0.7573) and far below E3 (0.7731 / AUC 0.8574). Not added to the blend. Not tried: other Timestral sizes fine-tuned (123M, 209M), more variates (NV=128), more seeds or epochs, fine-tuned B features as the per-frame input.
+
+## 2026-11-21 - Kaggle 15 fps fine-tune, fold 0 (K=12, 1 epoch)
+
+- Run: `kaggle_finetune_15fps.ipynb`, K=12, 15 fps (every 2nd frame + every 15th), 1 epoch, hold-out fold 0, no augmentation, standard fp32 AdamW + clip 1.0 with fp16 autocast and gradient scaler (Kaggle GPU without bf16), 2750 steps at 1.5 s/step: train 1.42 h, total 2.2 h (well under the 8.5 h cap). Final loss 0.5535, hold-out frame accuracy 0.7103. Output files: weights, head, features (13521 x 2560), val logprobs (3115 x 8) and meta, summary.
+- Scored with the same local procedure as the augmentation screens (`ft2_screen_score.py` logic: head cheat probability = sum of 4 cheat classes, averaged over the clip's 2 frames at frames 0 and 15, the same 1364 fold-0 clips): AUC 0.8679, F1 at 0.5 0.7946, F1 at best threshold 0.7981 (thr 0.55). The notebook's own summary reports AUC 0.8561 / F1 0.7911 on 1449 clips (it also counts clips the local labels drop), so use the aligned numbers.
+- Comparison on the same fold 0 and metric (local K=12, 2 fps, 2 epochs, 8-bit AdamW): no augmentation 0.8495 / 0.7645 and 0.8483 / 0.7520; photo 0.8613; quality 0.8591; hide 0.8730; weather 0.8721. So 15 fps + 1 epoch gives +0.018 AUC over no augmentation, in the range of the single augmentation groups, below hide and weather. The runs differ in more than fps (optimizer, precision, epochs, steps), so the gain cannot be attributed to the frame rate alone. One run per setting; seed noise about 0.001 AUC.
+- Not done: the other 4 folds, test inference with these weights, B rebuilt on the Kaggle features, and the Kaggle recipe combined with the best augmentation tokens.
+
+## 2026-11-21 - Augmentation stage 2a: do the group gains add up? (fold 0, K=12, 2 epochs)
+
+- Same setup and metric as the group screens (1,364 clips, AUC primary, seed noise about 0.001, F1 at best threshold noisier). Baselines 0.8495 / 0.7645 and 0.8483 / 0.7520. Single groups: hide 0.8730, weather 0.8721, mix 0.8661, hflip 0.8650, photo 0.8613, quality 0.8591, geo 0.8476.
+
+| Run | AUC | F1 at 0.5 | F1 at best thr | thr |
+|---|---|---|---|---|
+| hide + weather | 0.8755 | 0.7458 | 0.7962 | 0.75 |
+| **hide + weather + hflip** | **0.8866** | 0.7580 | **0.8151** | 0.675 |
+| hide + weather + mix + hflip | 0.8623 | 0.7185 | 0.7730 | 0.725 |
+| hide + weather + mix + hflip + photo + quality (all except geo) | 0.8802 | 0.7709 | 0.8037 | 0.60 |
+
+- Result: gains add only partly. hide + weather (0.8755) is barely above hide alone (0.8730); adding hflip gives the best run so far (0.8866, +0.037 AUC over no augmentation); adding mix on top drops it to 0.8623, below the no-augmentation level of hide + weather, so mix hurts in combination (it mixes images and labels, which stacks badly with the hiding). All groups except geo reach 0.8802, below hide + weather + hflip.
+- Next (stage 2b): leave one group out of hide + weather + hflip (hide + hflip, weather + hflip) and add photo or quality to it, then single tokens inside the groups that matter, then the best set on all 5 folds.
+
+## 2026-11-21 - Augmentation stage 2b: leave one group out, add photo or quality (fold 0, K=12, 2 epochs)
+
+- Same setup and metric as stage 2a (1,364 clips, AUC primary, seed noise about 0.001). Reference: hide + weather + hflip 0.8866 / 0.7580 / 0.8151.
+
+| Run | AUC | F1 at 0.5 | F1 at best thr | thr |
+|---|---|---|---|---|
+| hide + hflip (no weather) | 0.8737 | 0.7495 | 0.7847 | 0.625 |
+| weather + hflip (no hide) | 0.8773 | 0.7691 | 0.7856 | 0.65 |
+| hide + weather + hflip + photo | 0.8861 | 0.7623 | 0.8002 | 0.60 |
+| hide + weather + hflip + quality | not done (stopped at step 100 of 696, see below) | | | |
+
+- Result: dropping hide or weather from hide + weather + hflip costs 0.009 to 0.013 AUC, so both matter and add to each other; adding photo does not help (0.8861 vs 0.8866, within noise, lower F1). hide + weather + hflip stays the best set. The quality add-on and the single-token ablation inside the groups were not run.
+- Decision by the user (had to leave and wanted a submission file now): stop the screens and go straight to the final chain with hide + weather + hflip: K=12, 2 epochs, 2 fps, all 5 folds with weights saved (`cache/ft2/aug_best/`), test inference on all 30 frames, B rebuilt (`B_ft2_aug_best`), blend v2 members with the new B (B, E3 BiGRU, E3 transformer, D1, E5 transformer; weights and threshold from held-out train, 1.csv only as a second check). Output file `submissions/blend_v2_ft2B_aug.csv`. Results go in the next entry.
+- The Kaggle 15 fps all-fold plan was dropped for now by the user ("5 kaggle folds for what"). A 30 fps, 100% train notebook (`kaggle_finetune_30fps_full.ipynb`, no held-out score) was prepared but not run.
+
+- 2026-11-21, paused by the user (needed the GPU/RAM for something else): the stage 2b queue was stopped during its first run (hide + hflip, killed after epoch 0, nothing saved); the four runs hide + hflip, weather + hflip, hide + weather + hflip + photo and hide + weather + hflip + quality are not done and are rerun from the start on resume. Nothing else was running. Blend member predictions and the key scripts were copied to `cache/scratch_backup_2026-11-21/` (ignored by git) because the scratchpad can be cleared.
+
+## 2026-11-21 - Plan change: no local 5-fold augmented run, Kaggle 15 fps notebooks for all 5 folds, quick file with the Kaggle fold-0 model
+
+- The final chain (K=12, 2 fps, hide + weather + hflip, 5 folds, about 2.5 h) was started and stopped during fold 0 by the user's request (a submission file was needed in under 1 hour); nothing was saved from it (`cache/ft2/aug_best/` is empty). The stage 2b quality add-on run was also stopped at step 100 of 696.
+- New notebooks `kaggle_15fps_aug/kaggle_finetune_15fps_aug_fold0.ipynb` to `..._fold4.ipynb` (user runs them on Kaggle later, about 2.2 h each, about 11 h for all 5): same as `kaggle_finetune_15fps.ipynb` (K=12, 15 fps, 1 epoch, 8.5 h budget) with the augmentation module of `scripts/ft2_augs.py` embedded in a new "Augmentation" section and applied to every training batch on the GPU (`AUG = "hide+weather+hflip"`), `HOLDOUT_FOLD` set to the fold number, output tag `k12_15fps_aug_fold<N>`. The augmentation code was smoke-tested on a random batch; the notebooks themselves were not run. Not yet known: whether augmentation helps with 1 epoch at 15 fps (the local screens used 2 epochs at 2 fps).
+- `kaggle_finetune_30fps_full.ipynb`: 30 fps, `HOLDOUT_FOLD = None` (100% train, no held-out score), no augmentation, `SAVE_FEATURES = False`; estimated 4 to 4.5 h on Kaggle; not run.
+- Test inference of the Kaggle 15 fps fold-0 weights on all 30 frames of the test sequences (new script in the scratchpad, same code as `ft2_infer_test.py` with one fold): in progress, about 40 s per 32 sequences, about 32 min in total. Result and blend go in the next entry.
+- Fold-0 comparison of three blends with the v2 weights (B x2, E3 BiGRU, E3 transformer, D1, E5 transformer, each x1) and a threshold from the 1,364 held-out fold-0 clips (head cheat probability for the Kaggle model, averaged over the clip's 2 frames):
+
+| B in the blend | F1 (best thr) | AUC |
+|---|---|---|
+| old B (2 test frames) | 0.8454 | 0.9355 |
+| ft2 K=12 B (2 fps, no augmentation) | 0.8301 | 0.9281 |
+| Kaggle 15 fps K=12 | 0.8312 | 0.9288 |
+
+  Alone on fold 0 the AUC is 0.8944 for old B, 0.8644 for ft2 K=12 and 0.8679 for the Kaggle model. So the Kaggle model is only about equal to yesterday's K=12 and clearly below old B; one fold, 1,364 clips, so rough.
+
+- New notebook `kaggle_15fps_aug/kaggle_finetune_15fps_aug_folds1to4.ipynb` (made at the user's request, to run folds 1 to 4 in one Kaggle session, since fold 0 was already run with the older notebook): same recipe and augmentation (hide + weather + hflip) as the per-fold notebooks, but the setup (video decoding, model load) runs once and a loop `FOLDS = [1, 2, 3, 4]` trains and scores each fold. Per fold: trainable blocks reset to the pretrained DINOv3 weights, speed benchmark, training, weights and head saved, held-out fold scored, features saved; folds whose `summary.json` exists are skipped; the remaining session time is split evenly across the folds not yet run (step count is cut if needed). Outputs `k12_15fps_aug_fold<N>_*`. Estimated about 7 h in total (about 0.8 h setup + about 1.6 h per fold). Syntax checked only, not run. Note: fold 0 of the earlier run has no augmentation, so B's held-out predictions would mix one model without augmentation (fold 0) and four with it.
+
+- Same fold-0 comparison with the Kaggle model in B's full recipe (logistic regression on the pair summary of its features + the 30-frame pose, trained on folds 1-4 whose backbone features are in-sample, scored on fold 0): blend F1 0.8310, AUC 0.9292 (threshold 0.70); alone AUC 0.8738 (the head-probability version alone: 0.8679, blend 0.8312). So the two ways of using the Kaggle model give the same blend score, both below the old-B blend (0.8454) and equal to the ft2 K=12 blend (0.8301).
+- Decision by the user (2026-11-21): the Kaggle fine-tune runs (5-fold notebooks) are postponed to a later day, close to the end of the competition, because the augmentation and the rest of the pipeline are still being tuned; tomorrow continues with the augmentation tuning and the video models.
+
+- Notebook cleanup at the user's request (2026-11-21): deleted `kaggle_finetune_15fps.ipynb` (no augmentation, used for the fold-0 run), `kaggle_finetune_30fps_full.ipynb` and the five per-fold notebooks in `kaggle_15fps_aug/`. The only Kaggle notebook left is `kaggle_15fps_aug/kaggle_finetune_15fps_aug_folds1to4.ipynb`; with `AUG = "0"` and `FOLDS = [0]` it reproduces the earlier no-augmentation fold-0 run, and a 30 fps run needs `FPS = 30`.
+
+## 2026-11-21 - Quick file: v2 blend with the Kaggle 15 fps fold-0 model as B (full recipe: LR + pose)
+
+- Test features: Kaggle fold-0 weights on all 30 frames of the 1,515 test sequences (`cache/kaggle_15fps/k12_15fps_fold0_test_feat.npy`, shape 1 x 1515 x 30 x 2560). B = logistic regression on the pair summaries (15 interleaved pairs, probabilities averaged) + 30-frame pose, trained on folds 1-4 (backbone features in-sample), scored on fold 0; blend with the v2 weights (B x2, E3 BiGRU, E3 transformer, D1, E5 transformer x1); rank scale and threshold from the 1,364 fold-0 clips only (shortcut: one fold model, one fold of held-out data).
+- Result: threshold 0.70, fold-0 held-out blend F1 0.8310, AUC 0.9292; vs `1.csv` (second check only) 0.8327, cheat share 0.228. File `submissions/blend_v2_k15B.csv` (not submitted).
+- Same blend with the head cheat probability (no LR, no pose) as B: fold-0 F1 0.8312, vs `1.csv` 0.8556, cheat share 0.244. Old B blend on fold 0: 0.8454 (vs `1.csv` 0.8335); ft2 K=12 B blend: 0.8301 (vs `1.csv` 0.8367). Differences of 0.002 to 0.02 vs `1.csv` between these versions are within the noise seen before (see the ft2 K=12 entry), so the held-out fold-0 numbers decide, and they rank old B first.
+
+- Public leaderboard (2026-11-21, submitted by the user as `submission.csv` = the LR + pose file above, cheat share 0.228): **0.8471858**. For comparison: ft2 K=12 B blend (2 fps, no augmentation, all 5 folds) 0.8408476; old-B blend v2 0.8518237 (uses 2 test frames). So the Kaggle 15 fps B from ONE fold model (trained on 80% of the data, 1 epoch, no augmentation, threshold from fold 0 only) is 0.0063 better than the 2 fps 5-fold K=12 B and 0.0046 below old B, while its fold-0 held-out blend F1 was equal to the ft2 K=12 one (0.8310 vs 0.8301). Rule-compliant best so far (all 30 test frames). One public score per file; a difference of about 0.006 can be partly noise, but the direction (15 fps helps) agrees with the fold-0 AUC screen (0.8679 vs 0.8495).
+
+- Public leaderboard (2026-11-21, submitted by the user as `submission.csv` = `blend_v2_k15_headonly.csv`): **0.8617276**, the best public score so far (old-B blend 0.8518, Kaggle 15 fps B with LR + pose 0.8472, ft2 K=12 blend 0.8408). Same blend, same Kaggle fold-0 model, only B differs: here B is the fine-tuned model's own head cheat probability averaged over all 30 test frames (no logistic regression, no pose), 0.0145 above the same model with the LR + pose recipe. `1.csv` ranked the two the same way this time (0.8556 vs 0.8327), the fold-0 held-out blend F1 did not separate them (0.8312 vs 0.8310, one fold of 1,364 clips).
+- Reading: the LR on the fine-tuned features trains on memorised (too clean) backbone features and the other blend members (E3, D1, E5) already carry the pose, so the LR + pose B may add a weaker, duplicate signal while the head probability is a different, cleaner one. This is one score for one file; not yet tested with all 5 folds, where the head probability is held-out for every clip and the blend weight for it can be chosen properly.
