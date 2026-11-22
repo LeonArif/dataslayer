@@ -8,9 +8,10 @@ from pathlib import Path
 import cv2, numpy as np, pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA, OUT = ROOT / "data", ROOT / "cache/ft_frames_testfmt"
+import os
+DATA, OUT = ROOT / "data", ROOT / os.environ.get("FRAMES_DIR", "cache/ft_frames_testfmt")      # env FRAMES_DIR and IMG_H / IMG_W for a different input size (default 224x400)
 OUT.mkdir(parents=True, exist_ok=True)
-STEP, IMG_HW = 15, (224, 400)
+STEP, IMG_HW = 15, (int(os.environ.get("IMG_H", 224)), int(os.environ.get("IMG_W", 400)))
 cv2.setNumThreads(2)
 
 

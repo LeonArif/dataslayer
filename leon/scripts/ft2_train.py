@@ -18,16 +18,17 @@ from torch.utils.checkpoint import checkpoint
 from sklearn.model_selection import StratifiedGroupKFold
 
 ROOT = Path(__file__).resolve().parents[2]
-FR = ROOT / "cache/ft_frames_testfmt"
+FR = ROOT / os.environ.get("FRAMES_DIR", "cache/ft_frames_testfmt")
 OUT = ROOT / "cache/ft2" / os.environ.get("FT_OUT", "run"); OUT.mkdir(parents=True, exist_ok=True)
-IMG_HW, DEVICE, SEED = (224, 400), "cuda", 42
+IMG_HW, DEVICE, SEED = (int(os.environ.get("IMG_H", 224)), int(os.environ.get("IMG_W", 400))), "cuda", 42     # env IMG_H / IMG_W with FRAMES_DIR = a frame cache made by ft2_frames.py at that size
 K = int(sys.argv[1]); EPOCHS = int(sys.argv[2]) if len(sys.argv) > 2 else 2
-BS, LR_BLOCKS, LR_HEAD, WD = 16, 2e-5, 1e-3, 0.05
+BS, LR_BLOCKS, LR_HEAD, WD = 16, float(os.environ.get("LR_BLOCKS", 2e-5)), float(os.environ.get("LR_HEAD", 1e-3)), 0.05
 AUG, BENCH = os.environ.get("AUG", "0"), int(os.environ.get("BENCH", 0))
 OPS = ft2_augs.parse(AUG)
 FOLDS = [int(f) for f in os.environ.get("FOLDS", "0,1,2,3,4").split(",")]
 VAL_ONLY, TSEED = int(os.environ.get("VAL_ONLY", 0)), int(os.environ.get("TSEED", 42))
 ALL = int(os.environ.get("ALLFRAMES", 0))
+LLRD, EMA_FRAC = float(os.environ.get("LLRD", 1.0)), float(os.environ.get("EMA_FRAC", 0))   # layer-wise LR decay per block below the top one (1 = same LR everywhere); EMA window as a fraction of the steps (0 = off)
 CHEAT_ACTIONS = ["Looking_Under_the_Desk", "Reading_Hidden_Notes", "Repeated_Peeking", "Using_Smartwatch"]
 NORMAL_ACTIONS = ["Checking_Smartwatch", "Looking_Around", "Thinking", "Writing_Answers"]
 ACTIONS = CHEAT_ACTIONS + NORMAL_ACTIONS
@@ -142,6 +143,8 @@ for fold in FOLDS:
         opts[p].step(); opts[p].zero_grad(set_to_none=True)
     handles = [p.register_post_accumulate_grad_hook(hook) for p in blocks_params]
     head_opt = torch.optim.AdamW(m.head.parameters(), lr=LR_HEAD, weight_decay=WD)
+    scale = {p: LLRD ** (K - 1 - i) for i, b in enumerate(m.train_blocks) for p in b.parameters()}; scale.update({p: 1.0 for p in base.norm.parameters()})
+    ema_params = blocks_params + list(m.head.parameters()); ema = [p.detach().clone().float() for p in ema_params] if EMA_FRAC > 0 else None
 
     va = np.where((meta.fold == fold).values)[0]
     if ALL:
@@ -172,7 +175,7 @@ for fold in FOLDS:
         tot = 0.0
         for s in range(0, len(perm), BS):
             b = np.sort(perm[s:s + BS]); f = lr_at(step)
-            for o in opts.values(): o.param_groups[0]["lr"] = LR_BLOCKS * f
+            for p_, o in opts.items(): o.param_groups[0]["lr"] = LR_BLOCKS * f * scale[p_]
             head_opt.param_groups[0]["lr"] = LR_HEAD * f
             yb = y_all[torch.from_numpy(b).to(DEVICE)]; ysoft = None
             if OPS:
@@ -182,6 +185,9 @@ for fold in FOLDS:
             loss = F.cross_entropy(m(xb), yb if ysoft is None else ysoft, weight=w, label_smoothing=0.1)
             head_opt.zero_grad(set_to_none=True); loss.backward(); head_opt.step()
             step += 1; tot += loss.item() * len(b)
+            if ema is not None:
+                d = min(1 - 1 / max(1.0, EMA_FRAC * steps), (1 + step) / (10 + step))
+                with torch.no_grad(): torch._foreach_mul_(ema, d); torch._foreach_add_(ema, [p.detach().float() for p in ema_params], alpha=1 - d)
             if BENCH and step == BENCH:
                 torch.cuda.synchronize(); print(f"BENCH K={K}: {BENCH * BS / (time.time() - t0):.1f} frames/s, peak {torch.cuda.max_memory_allocated() / 1e9:.2f} GB", flush=True); sys.exit()
             if step % 100 == 0:
@@ -190,6 +196,15 @@ for fold in FOLDS:
     for h in handles: h.remove()
     if VAL_ONLY:
         pv, _ = predict(m, va)
+        if ema is not None:      # also score the averaged weights (saved next to the run as <run>_ema)
+            keep = [p.detach().clone() for p in ema_params]
+            with torch.no_grad():
+                for p_, e in zip(ema_params, ema): p_.copy_(e.to(p_.dtype))
+            pe, _ = predict(m, va); ye = meta.y.values[va]; oke = ye >= 0
+            print(f"K={K} fold={fold} EMA held-out frame accuracy {(pe.argmax(1)[oke] == ye[oke]).mean():.4f}", flush=True)
+            (OUT.parent / (OUT.name + "_ema")).mkdir(exist_ok=True); np.save(OUT.parent / (OUT.name + "_ema") / f"k{K}_f{fold}_val.npy", np.c_[va, pe])
+            with torch.no_grad():
+                for p_, k_ in zip(ema_params, keep): p_.copy_(k_)
     else:
         lp_all, fe_all = predict(m, np.arange(len(meta))); pv = lp_all[va]
     yv = meta.y.values[va]; ok = yv >= 0

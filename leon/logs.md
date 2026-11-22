@@ -4,36 +4,41 @@
 
 Ideas we have discussed but not run.
 When one is tried, delete it from this list and write its result as a normal dated entry below.
-Last updated 2026-11-20.
+Rewritten 2026-11-22: everything already tried (augmentation screens, recipe screens, head-only B, V-JEPA 2, V-JEPA 2.1 ViT-L, VideoMAE v2, aggregation, flip TTA, person crops, boundary clips, weight averaging, layer-wise learning rate, fine-tune + sequence head) now has its own dated entry below and was removed from this list.
+Naming (user, 2026-11-22): one-off techniques get descriptive names; if one works it becomes part of the base configuration of B, D or E, not a new letter.
 
-Planned for the next session (added 2026-11-21 evening, in this order):
-- Augmentation tuning first: single-token ablation inside hide and weather, the quality add-on (stopped at step 100), a seed repeat of hide + weather + hflip.
-- Short screens of the fine-tune recipe with the winning augmentation (fold 0, about 14 to 17 min each): 1 against 2 epochs, K=8 (K=16 was not better, K=20 untried), one learning-rate change.
-- B without the logistic regression: the head-only B (the fine-tuned model's own cheat probability, no LR, no pose) scored 0.8617 public from one fold-0 Kaggle model, against 0.8472 with LR + pose. Test the middle cases on held-out data: LR on the fine-tuned features without pose, and head probability with pose added; use the head probability as B in the next fine-tune test.
-- Fine-tuned features into the sequence heads (BiGRU and transformer on the fine-tuned per-frame features) and compare with the frozen + sequence head (E). If the fine-tuned version is not better, bring the frozen A (frozen DINOv3 + logistic regression + pose, weight 0 in v2) back into the blend search with B, D and E and re-check its weight.
-- The downloaded video models (V-JEPA 2 ViT-g, VideoMAE v2 giant, InternVideo-Next Large): read the custom code, extract on all 30 frames, logistic regression and sequence heads, blend check.
-- Final Kaggle fine-tune (5 folds, best recipe, minimal notebook `kaggle_15fps_aug/kaggle_finetune_15fps_aug_folds1to4.ipynb`) postponed by the user to near the end of the competition.
-- Fine-tune more unfrozen ViT-H+ blocks on 30-frame clips: 16, then 20 only if 16 is better, and keep going until the score stops improving. Past 20 blocks needs a cache from an earlier block than 12 and LoRA or a lighter optimizer.
-- Augment the train images: screening is queued (see the 2026-11-20 entry on the augmentation screen). Still open after the screen: a full 5-fold run with the winning augmentations, and whether the test frames need any change.
-- Use the best fine-tuned backbone as the main DINOv3 feature extractor, also for the sequence models (E3 and E5 would read fine-tuned per-frame features instead of frozen ones). Choice to make: all 30 train frames (about 2 h) or every 3rd frame for train with 3 interleaved sets of 10 at test.
-- Rerun the blend with the 30-frame fine-tuned B (it replaces the old B and the frozen A).
-- Fine-tune LeVJEPA (the video model) instead of using it frozen. Heavier than ViT-H+: 30 frames of 196 patches are about 5,900 tokens per clip, so caching a middle layer would take tens of GB; probably needs fewer frames or only the top blocks. The sequence head on frozen LeVJEPA is already done (E5).
-- More frozen video models as extra blend members, using the same recipe as LeVJEPA (all 30 frames, per-frame vector or clip vector, logistic regression and sequence head). Candidates to check for availability and frame-count limits on the 8 GB GPU: V-JEPA 2, VideoMAE and VideoMAE v2, TimeSformer, Video Swin. Video-language models are not allowed, so no text-aligned ones.
+Running or next:
+- V-JEPA 2.1 ViT-g (1B) as frozen members (extraction running, then LR + pose, BiGRU, transformer and the blend check). The ViT-L (300M) added nothing.
+- Run the new Kaggle fine-tune `kaggle_15fps_aug/kaggle_finetune_15fps_aug_full.ipynb` (100% train, 15 fps, K=12, 2 epochs, augmentation, weight averaging; the user runs it), then predict all 30 test frames with the averaged and the unaveraged weights and compare each with 1.csv (secondary check only).
+- Frozen A (frozen DINOv3 + logistic regression + pose) in the blend again, but trained on the augmented extractions from the E3 step (user, 2026-11-22: after E3). Plain A was tested with the fair nested search and got weight 0 (see the dated entry); re-test it the same way once the augmented features exist.
+- Rebuild the blend with the new fine-tuned B (and the 30 fps model as B for submissions until the next fine-tune, user rule 2026-11-22).
 
-Newer backbones (check when public weights exist):
-- DINOv4 is only a guess in a LinkedIn post (2026-11-20), nothing official. JEM (Joint-Embedding Multi-view, arxiv 2610.10013, a 7B model, said to match DINOv3) is a possible successor but is far too big for the 8 GB GPU unless a small version with public weights appears. If either comes out in a size that fits, test it as the frozen backbone and as the fine-tune base.
+Fine-tune ideas that need a new fine-tune to test (fold-0 screens, about 14 to 17 min each):
+- Higher input resolution than 224x400 (check this log first that it was not tried).
+- Teacher soft labels in the fine-tune (the whole-video teacher gives soft labels to the frame model).
+- Frames from the raw video instead of the test format, and a 32-bit AdamW with clipping instead of the 8-bit one (low priority, user 2026-11-21; the 32-bit needs a memory check on the 8 GB GPU).
+- Fine-tuned per-frame features into the sequence models E3 / E5 (they would read fine-tuned instead of frozen DINOv3 features; the simple heads on the honest fold-0 outputs were worse than the plain mean).
+- Fine-tune LeVJEPA (the video model) instead of using it frozen; heavy (about 5,900 tokens per clip), probably needs fewer frames or only the top blocks.
+- More unfrozen blocks: K=16 and K=20 were not better in screens, so only with LoRA or a lighter optimiser beyond 20.
+- Long 30 fps 5-fold fine-tune on Kaggle or an A100 (Colab) once the architecture is settled (user, 2026-11-22).
+- Final 5-fold fine-tune with the best recipe, postponed by the user to near the end of the competition (minimal notebook, A100 on Colab is possible).
+
+Other models and members:
+- Supervised action models as frozen members (VideoMAE-base fine-tuned on Kinetics, TimeSformer, Video Swin); InternVideo-Next was skipped because it needs `flash_attn`. Video-language models are not allowed.
+- Newer backbones when public weights exist: DINOv4 (only a rumour, 2026-11-20), JEM (7B, too big for the 8 GB GPU unless a small version appears).
 
 Teacher-student and context ideas:
 - Soft labels from the whole-video teacher on the sequence models (E3 and E5). Only tried on the logistic regression (C1, no gain).
-- Context guessing: an extra output that predicts the previous and next second's features from the clip alone, to give the model more to learn from (HalluciNet style).
+- Context guessing: an extra output that predicts the previous and next second's features from the clip alone (HalluciNet style).
 - Copying the teacher's per-person-centred features: the student learns to guess what the whole-video teacher computes.
 
 Smaller ideas:
-- B with honest features for training: today B trains its logistic regression on the fold backbone's features of the 80% clips that backbone was trained on (memorised, cleaner than test features) and scores the held-out 20%. Alternative: take each clip's features from the fold model that never saw it (out-of-fold features for all 6,166 clips), train the logistic regression on those, and for test average the 5 models' features or predictions. Expected: the regression learns the right level of trust in the features.
-- Stacking (a logistic regression on the members' scores) instead of the weight grid in the blend.
 - Tuning E's own settings (PCA size, hidden size, epochs, dropout); each was run at one setting only.
 - A LightGBM head on the LeVJEPA features as in Owen's baseline (D1 used a logistic regression).
 - Re-extracting the frozen DINOv3 train features for all folds in the test format (only fold 0 was checked, the gap cost A about 0.02 to 0.03 F1).
+- Retry the sequence head on top of the fine-tuned frames with the honest outputs of all 5 folds after the final fine-tune (fold 0 alone was too small).
+
+Notebooks (user, 2026-11-22): the main notebook gets the RT-DETR + ViTPose pose step; the final notebook runs from scratch (all extraction, pose, fine-tune, members, blend) for the committee.
 
 ## 2026-11-16 - baseline_cv.ipynb created
 
@@ -1567,3 +1572,232 @@ Same pipeline with the start search limited to 4.25-9.25 s (scratch `legit_agree
 
 - Public leaderboard (2026-11-21, submitted by the user as `submission.csv` = `blend_v2_k15_headonly.csv`): **0.8617276**, the best public score so far (old-B blend 0.8518, Kaggle 15 fps B with LR + pose 0.8472, ft2 K=12 blend 0.8408). Same blend, same Kaggle fold-0 model, only B differs: here B is the fine-tuned model's own head cheat probability averaged over all 30 test frames (no logistic regression, no pose), 0.0145 above the same model with the LR + pose recipe. `1.csv` ranked the two the same way this time (0.8556 vs 0.8327), the fold-0 held-out blend F1 did not separate them (0.8312 vs 0.8310, one fold of 1,364 clips).
 - Reading: the LR on the fine-tuned features trains on memorised (too clean) backbone features and the other blend members (E3, D1, E5) already carry the pose, so the LR + pose B may add a weaker, duplicate signal while the head probability is a different, cleaner one. This is one score for one file; not yet tested with all 5 folds, where the head probability is held-out for every clip and the blend weight for it can be chosen properly.
+
+## 2026-11-21 - B variants on the 5-fold ft2 K=12 run (2 fps, no augmentation, held-out predictions of all 6,166 clips)
+
+- Question after the head-only Kaggle file scored 0.8617 public (LR + pose version of the same model 0.8472): is the logistic regression or the pose the weak part of B? Script `b_variants.py` (scratchpad): all variants use the saved held-out head probabilities (`cache/ft2/k12/k12_f*_val.npy`, mean of the clip's 2 frames) or the fold backbone features; each is scored alone (AUC, F1 at the best threshold) and as B in the v2 blend (B x2, E3 BiGRU, E3 transformer, D1, E5 transformer x1, threshold from held-out train).
+- Variants: oldB (12-block, raw frames, LR + pose), LP = LR on the pair summary + pose (current ft2 recipe, member B_ft2_k12), L = LR on the pair summary only, H = head cheat probability only, HS = LR on the 8 head probabilities only (recalibration), HP = LR on the 8 head probabilities + log-probabilities + pose, trained on the honest head probabilities of the other folds.
+
+| B variant | Alone AUC | Alone F1 | Blend AUC | Blend F1 |
+|---|---|---|---|---|
+| oldB | 0.8664 | 0.7889 | 0.9225 | 0.8265 |
+| LP (LR + pose) | 0.8521 | 0.7829 | 0.9182 | 0.8204 |
+| L (LR, no pose) | 0.8479 | 0.7788 | 0.9179 | 0.8187 |
+| HP (honest head probs + pose) | **0.8862** | **0.8036** | 0.9215 | 0.8218 |
+| HS (honest head probs only) | 0.8568 | 0.7889 | 0.9224 | 0.8263 |
+| H (head probability only) | 0.8497 | 0.7804 | **0.9227** | 0.8214 |
+
+- Results: (1) Head only vs LR + pose in the blend: +0.0045 AUC and +0.0010 F1 for the head, so the direction agrees with the public result but the size (public +0.0145) is not reproduced on held-out data; part of the public gap is probably luck. (2) Pose helps B alone a lot when it is stacked on honest head probabilities (HP alone AUC 0.8862 vs 0.8497 head only), but inside the blend it adds nothing (0.8218 vs 0.8214), consistent with the other members already carrying the pose. (3) The LR without pose (L) is the weakest in the blend, so the LR on memorised features is not the useful part. (4) Recalibrating the head (HS) gives the best blend F1 among the new variants (0.8263, equal to old B 0.8265) at AUC 0.9224.
+- Frozen A back in the blend (weight grid over B, E3 BiGRU, E3 transformer, D1, E5 transformer, A in {0,1,2}, chosen on the same held-out data, so slightly optimistic): with H as B the best is 0.8279 (weights 2/0/2/1/2/1, A weight 1) vs 0.8214 without A; with LP as B the best is 0.8227 (A weight 0) vs 0.8204. So A helps a little only next to the head-only B.
+- Not run on test: the head layers were not saved in the ft2 K=12 run, so these variants have no test predictions; this entry only ranks the variants on held-out data.
+
+## 2026-11-21 - Kaggle 30 fps, 100% train fine-tune finished (K=12, 1 epoch, no augmentation)
+
+- Run by the user on Kaggle with the 30 fps / `HOLDOUT_FOLD = None` notebook (since deleted; its config is `FPS = 30`, `FOLDS`/holdout none in the remaining notebook). Summary: 6,701 steps at 1.518 s per step (benchmark), 3.67 h training, 4.44 h total, final loss 0.523, fp16 AMP. No held-out score exists (all train clips were used for training). The estimate made before the run was 4 to 4.5 h, matched.
+- Files extracted to `cache/kaggle_30fps/` (git-ignored): `k12_30fps_full_weights.pt` (630 MB), `k12_30fps_full_head.pt`, `k12_30fps_full_summary.json`. Not yet used for test inference.
+
+## 2026-11-22 - Augmentation ablation finished (leave-one-token-out around hide + weather + hflip)
+
+- Setup as before: fold 0, K=12, 2 epochs, held-out frames only, AUC = head cheat probability averaged over the clip's 2 frames. Reference: full set (erase, cutout, griddrop, coarse, fog, shadow, flare, rain, snow, hflip) AUC 0.8866.
+- Drop one token from the full set:
+
+| Dropped token | AUC | Change vs 0.8866 |
+|---|---|---|
+| erase | 0.8800 | -0.0066 |
+| cutout | 0.8713 | -0.0153 |
+| griddrop | 0.8591 | -0.0275 |
+| coarse | 0.8719 | -0.0147 |
+| fog | 0.8821 | -0.0045 |
+| shadow | 0.8870 | +0.0004 |
+| flare | 0.8831 | -0.0035 |
+| rain | 0.8933 | +0.0067 |
+| snow | 0.8842 | -0.0024 |
+
+- Full set + quality group: 0.8685 (-0.0181), so quality hurts. Full set with seed 2: 0.8789 (-0.0077 vs seed 42), so the seed noise of this screen is about 0.008, not 0.001 as assumed earlier.
+- Reading: the hide tokens (erase, cutout, griddrop, coarse) clearly matter (each drop costs 0.007 to 0.028, larger than the noise). Weather tokens individually are within noise (shadow +0.0004, rain +0.0067 are not distinguishable from the seed spread), so the weather group stays as is. Best set unchanged: hide + weather + hflip. Not tested: single tokens inside geo, photo and quality, and the `crop` token alone.
+
+## 2026-11-22 - Kaggle 30 fps (100% train) test inference and the 30 fps blend file
+
+- Inference: `cache/kaggle_30fps/k12_30fps_full_weights.pt` on all 30 frames of the 1,515 test sequences (first 20 blocks live, top 12 blocks fine-tuned, head cheat probability averaged over the 30 frames; no LR, no pose), 27 min. Output `k12_30fps_full_test_feat.npy` (1, 1515, 30, 2560). The model was trained without augmentation and has no held-out score.
+- Test comparison with the 15 fps fold-0 model (also head only): mean cheat probability 0.389 (15 fps) vs 0.339 (30 fps), correlation 0.886, agreement at 0.5 0.914.
+- v2 blend with B replaced (rank scale and threshold 0.70 from the 15 fps fold-0 held-out head probabilities, an assumption for the 30 fps model); fold-0 F1 is the same for all three because the held-out reference is the 15 fps model:
+
+| B | fold-0 F1 | vs 1.csv (secondary check) | cheat share |
+|---|---|---|---|
+| 15 fps fold-0 alone (= `blend_v2_k15_headonly.csv`, public 0.8617) | 0.8312 | 0.8556 | 0.244 |
+| 30 fps full alone | 0.8312 | 0.8496 | 0.234 |
+| average of 15 fps fold-0 and 30 fps full | 0.8312 | 0.8476 | 0.238 |
+
+- File written: `submissions/blend_v2_k15k30_avg_headonly.csv` (the averaged version). It differs from the 15 fps file in 32 rows. Not submitted. Public score: not yet known.
+
+## 2026-11-22 - V-JEPA 2 ViT-g frozen feature extraction (started)
+
+- Model `facebook/vjepa2-vitg-fpc64-256` (frozen, 1B parameters, fp16), all 30 frames of each clip fed as one clip (tubelet size 2, 15 time steps, 256x256 squashed, ImageNet normalisation), train frames through the test delivery format first. Script `scripts/extract_vjepa2.py`, output `cache/vjepa2_g_256_30/` (per clip (16, 1408): 15 per-time-step mean-patch vectors + the mean of all). Custom-code check: VideoMAE v2 and InternVideo-Next code read, no network or process calls; InternVideo-Next needs `flash_attn` (not installed), VideoMAE v2 needs `easydict` (not installed), so V-JEPA 2 goes first.
+
+- Public leaderboard (2026-11-22, submitted by the user as `submission_30.csv` = `blend_v2_k15k30_avg_headonly.csv`): **0.8627997**, new best (15 fps fold-0 only 0.8617276, +0.0011). The two files differ in 32 of 1,515 rows, so the gain is within noise; averaging in the 30 fps model does not hurt. The 30 fps model alone was not submitted.
+
+## 2026-11-22 - V-JEPA 2 ViT-g frozen members (V1 LR + pose, V5 BiGRU and transformer) and blend check
+
+- Features: `cache/vjepa2_g_256_30/` (all 30 frames as one clip, 15 time steps, per clip (16, 1408)); extraction took about 1 h 10 min (test 15 min, train 55 min). Members built like the LeVJEPA ones (`v1_vjepa2.py` = D1 recipe, `v5_vjepa2.py` = E5 recipe with 15 steps and the pose averaged per 2 frames), held-out per-video folds, 3 seeds for the sequence heads.
+- Alone (AUC / best F1): V1 LR + pose C=0.001 0.8485 / 0.7597 (D1 on LeVJEPA 0.8539 / 0.7381); V5 transformer 0.8681 / 0.7729 (E5 transformer 0.8784 / 0.7705); V5 BiGRU 0.8631 / 0.7659 (E5 BiGRU 0.8695 / 0.7521). Roughly equal to the LeVJEPA members, slightly weaker on AUC.
+- Blend check (v2 = B x2, E3 BiGRU, E3 transformer, D1, E5 transformer; held-out AUC 0.9225 / F1 0.8265):
+
+| Blend | AUC | F1 |
+|---|---|---|
+| v2 | 0.9225 | 0.8265 |
+| v2 + V1 x1 | 0.9231 | 0.8253 |
+| v2 + V1 x2 | 0.9204 | 0.8254 |
+| v2 + V5 transformer x1 | 0.9233 | 0.8250 |
+| v2 + V5 transformer x2 | 0.9216 | 0.8231 |
+| v2 + V5 BiGRU x1 | 0.9230 | 0.8228 |
+| v2 + V1 + V5 transformer | 0.9231 | 0.8254 |
+| v2 with D1 -> V1 and E5 -> V5 transformer | 0.9125 | 0.8205 |
+
+- Weight grid over B, E3 BiGRU, E3 transformer, D1, E5 transformer, V1, V5 transformer in {0,1,2}: best F1 0.8289 (2/1/0/1/0/0/1, AUC 0.9187), but the grid picks on the same held-out data and the gain over 0.8265 (+0.0024) is inside the noise. Conclusion: V-JEPA 2 adds nothing reliable; it is a near-duplicate of the LeVJEPA members. Not added to the blend. Test predictions of the V members are saved in the scratchpad `members/` folder (not in the repo).
+
+## 2026-11-22 - Fine-tune recipe screens (stage 4, started)
+
+- Same screen as the augmentation ablation (fold 0, K=12, held-out frames, AUC proxy) with the best augmentation (hide + weather + hflip), one change at a time: 1 epoch, K=8, block LR 4e-5, block LR 1e-5, K=20. Reference (K=12, 2 epochs, LR 2e-5 / 1e-3): 0.8866 (seed 42), 0.8789 (seed 2), so differences below about 0.01 are noise. `scripts/ft2_train.py` now reads optional `LR_BLOCKS` and `LR_HEAD` env variables (defaults unchanged). Queue script `screen_queue7.sh`, results appended to the scratchpad `screen_results.txt`.
+- Results (AUC on the 2 held-out frames of fold 0's 1,364 clips): 1 epoch 0.8635 (worse), K=8 0.8871 (same as K=12, cheaper), block LR 4e-5 0.8762, block LR 1e-5 0.8836, K=20 0.8788. Nothing beats the reference beyond noise. Recipe unchanged: K=12, 2 epochs, LR 2e-5 / 1e-3, augmentation hide + weather + hflip. K=8 is a valid cheaper option.
+
+## 2026-11-22 - V-JEPA 2.1 ViT-L (frozen, 300M, distilled from ViT-G) as a member
+
+- Features: Meta repo code, `vjepa2_1_vitl_dist_vitG_384.pt` (ema_encoder), 256 px, all 30 frames as 15 tubelets; per clip 15 per-time-step mean-patch vectors + overall mean (16 x 1024). Extraction `scripts/extract_vjepa21.py` (SIZE=l), 4.5 clips/s, about 25 min for test + train.
+- Members built exactly like the LeVJEPA ones (V1 = logistic regression + pose, V5 = BiGRU / transformer on the 15 time steps), 5 folds by subject, held-out train only:
+
+| member | AUC | F1 |
+|---|---|---|
+| V1 LR + pose (C 0.001) | 0.8375 | 0.7410 |
+| V5 transformer | 0.8612 | 0.7556 |
+| V5 BiGRU | 0.8516 | 0.7487 |
+| reference D1 (LeVJEPA LR + pose) | 0.8539 | 0.7381 |
+| reference E5 transformer (LeVJEPA) | 0.8784 | 0.7705 |
+
+- Blend check (v2 = AUC 0.9225, F1 0.8265): v2 + V1 x1 0.9223 / 0.8227, v2 + V5 transformer x1 0.9226 / 0.8235, v2 + V5 BiGRU x1 0.9217 / 0.8217, v2 + V1 + V5 transformer 0.9220 / 0.8196, D1 -> V1 and E5 -> V5 transformer 0.9129 / 0.8220. Best grid cell is the v2 weights themselves (2/1/1/1/1/0/0, 0.8265).
+- Conclusion: V-JEPA 2.1 ViT-L is not better than LeVJEPA (E5 transformer is still the best frozen member) and adds nothing to the blend. Not added. The ViT-g download (16.9 GB, about 2.4 GB done) stays paused; it is unlikely to change this because the L model was distilled from ViT-G.
+- Held-out 30-frame inference of the fold-0 Kaggle 15 fps model finished (`cache/kaggle_15fps/heldout30_parts/`, 96 videos, 28 min): per clip 30 frames of head log-probs (30 x 8) and features (30 x 2560). Next: aggregation tests (tech F) and a sequence head on these.
+
+## 2026-11-22 - Tech F: aggregation of the 30 frames and heads on top (fold-0 Kaggle 15 fps model, honest held-out)
+
+- Data: 1,364 held-out clips of fold 0 (6 subjects only, so everything below is noisy; seed noise was about 0.008 AUC), per-frame head log-probs and fine-tuned features over all 30 frames (`scripts` copy in scratchpad `agg30.py`). Cheat probability per frame = sum of the first 4 class probabilities.
+- Aggregation, AUC / best-threshold F1: 2 frames (0, 15) 0.8482 / 0.7829; all 30 mean prob (current B) 0.8545 / 0.7900; mean logit 0.8516; median 0.8481; trimmed mean 0.8525; max 0.8624; mean of the 10 most cheat-like frames 0.8655 / 0.7980; mean of the 10 least cheat-like frames 0.8238; fraction of frames above 0.5 0.8473; dominant 8-class action 0.8545; mean of 8-class log-probs 0.8547.
+- Heads on top, subject-grouped 5-fold CV inside the 1,364 clips: LR on probability stats 0.8510; LR on mean 8-class probs 0.8485 (F1 0.8057); LR on mean+std 8-class probs 0.8525 (F1 0.8012); LR on the mean fine-tuned 2,560-d feature 0.8025 (C 0.001) and 0.7789 (C 0.01) - clearly worse, as before.
+- Conclusion: using all 30 frames instead of 2 helps (+0.006 AUC), the plain mean is as good as any rule or learned head. "Top-10 mean" is +0.011 AUC but picked on the same data and inside the noise; not adopted (would need a second fold to confirm). No sequence head or LR beats the plain mean, so B stays head-only with the mean over 30 frames.
+- Next: tech G (horizontal flip TTA) on the same held-out clips, `infer_heldout30_flip.py`, output `cache/kaggle_15fps/heldout30_flip_parts/` (log probs only).
+
+## 2026-11-22 - Tech G (flip TTA) and tech K (boundary clips, frozen test)
+
+- G, flip test-time augmentation on the same 1,364 held-out clips of fold 0 (`infer_heldout30_flip.py`, mean of the 30 frame cheat probabilities): normal AUC 0.8545 / F1 0.7900; mirrored frames only 0.8203 / 0.7554; average of both (flip TTA) 0.8475 / 0.7921. The two correlate 0.84. The model is clearly not mirror-symmetric (side of the camera, hand side), so the mirrored view hurts. Not adopted. Output kept in `cache/kaggle_15fps/heldout30_flip_parts/`.
+- K, boundary clips on the frozen LeVJEPA D1 (LR + pose, C 0.001, 5 folds), scratchpad `k_frozen.py`. Start times from `truth_start.csv` (known for 2,899 clips; clip label rule "centre after start" agrees with the label on 99.3%). Only 186 of 6,166 clips (3%) have the start inside their second, 37 near the middle (25 to 75% after the start). Variants, trained on the changed set, evaluated on all held-out clips (AUC / F1): base 0.8539 / 0.7381; drop all straddling clips 0.8525 / 0.7354; drop the 37 middle ones 0.8538 / 0.7377; soft label (each straddler counted as cheat with weight = share after start, and as normal with the rest) 0.8532 / 0.7370. Evaluating without the straddlers gives the same picture (0.857 to 0.858). Nothing helps; the boundary clips are too few to matter. Dropped for the frozen heads; not worth a fine-tune screen either.
+
+## 2026-11-22 - Fine-tuned B + sequence head (honest held-out, fold-0 Kaggle 15 fps model)
+
+- 1,364 held-out clips of fold 0 (6 subjects), leave-one-subject-out CV, small BiGRU / transformer (hidden 64, dropout 0.3) over the 30 per-frame outputs (scratchpad `seq30.py`). AUC / best-threshold F1: plain mean of the 30 frame cheat probabilities 0.8545 / 0.7900; BiGRU on 30 x 8 log-probs 0.8098 / 0.7546; transformer on 30 x 8 log-probs 0.7717 / 0.6897; BiGRU on 30 x 2560 features 0.7781 / 0.7091; transformer on 30 x 2560 features 0.7873 / 0.7119.
+- Conclusion: a sequence head on top of the fine-tuned frames is clearly worse than the plain mean (too little honest data: 1,364 clips, 6 subjects; the frame head already carries the information). With the earlier LR-on-stats and LR-on-feature results this closes "fine-tune + sequence head" for now. It could be retried with the honest outputs of all 5 folds (6,166 clips) after the final fine-tune.
+- Naming rule from the user (2026-11-22): the lettered techniques (F to K) are one-off technique tests, not architecture branches like B / D / E. If one works it becomes part of the base configuration of B, D or E (for example "B trained with person crops"), not a new letter. From now on logs use descriptive names (person crops, weight averaging, layer-wise learning rate).
+- Submission rule from the user (2026-11-22): until the next fine-tune, B in new submissions = the Kaggle 30 fps K=12 model (trained on 100% of train, no augmentation, head only, mean over all 30 test frames), not the 15 fps fold-0 model. Note: this model has no held-out score; the rank scale and the 0.70 threshold come from the 15 fps fold-0 held-out head probabilities.
+
+## 2026-11-22 - Person crops (frozen test)
+
+- Frozen DINOv3 ViT-H+ features on person crops: box from the pose step (middle frame of the clip), expanded by 20%, squared, clipped, resized to 224x224, test format for train frames, frames 0,3,...,27 of every clip (scratchpad `h_extract.py`, 29 min, saved in `cache/h_crop_dinov3/`). Logistic regression on mean + std of the 10 frames, 5 per-video folds, held-out train (`h_eval.py`). Baseline full-frame features are the existing step-1 cache (224x400, not the test-format recode, a small format difference).
+- Results (C 0.001; AUC / F1): full frame 0.8070 / 0.7309; person crop 0.8084 / 0.7213; full + crop 0.8062 / 0.7262; full + pose 0.8205 / 0.7514; full + crop + pose 0.8143 / 0.7375 (C 0.003 is lower for all).
+- Conclusion: person crops give no gain on frozen features (and slightly hurt next to pose), so no crop fine-tune screen. Closed. Together with the boundary-clip test, flip TTA, aggregation and sequence head results, nothing from the lettered queue except possibly weight averaging / layer-wise learning rate remains.
+
+## 2026-11-22 - Weight averaging (EMA) and layer-wise learning rate (fine-tune screen)
+
+- Setup: fold 0, K=4, 1 epoch, augmentation hide + weather + hflip, held-out 2-frame AUC proxy (same as the earlier screens), 4 runs, each scoring the final weights and the averaged weights (EMA, window about the last 20% of steps) from the same training. `scripts/ft2_train.py` got two optional env variables, `EMA_FRAC` (0 = off) and `LLRD` (layer-wise decay per block below the top one, 1 = same rate everywhere); defaults unchanged. Layer-wise run: top block 3e-5, decay 0.8 (3e-5, 2.4e-5, 1.9e-5, 1.5e-5). Queue `screen_queue8.sh`; each run about 8.5 min.
+- Results (AUC), final weights / averaged weights: plain seed 42 0.8223 / 0.8231; plain seed 2 0.8304 / 0.8319; layer-wise seed 42 0.8216 / 0.8225; layer-wise seed 2 0.8282 / 0.8301.
+- Averaging: +0.0008, +0.0015, +0.0009, +0.0019 (4 of 4 positive, mean +0.0013), far below the seed noise of about 0.008 but consistent and free (no extra training). Adopted as part of the base fine-tune recipe, with the unaveraged weights kept as a backup and compared on the public/1.csv check.
+- Layer-wise learning rate: -0.0007 (seed 42) and -0.0022 (seed 2) against plain. Not adopted.
+- New notebook `kaggle_15fps_aug/kaggle_finetune_15fps_aug_full.ipynb` (built from the folds1to4 notebook; the old file is untouched): 100% train (no hold-out, no evaluation, no feature saving, no fold loop), K=12, 15 fps, 2 epochs (the recipe screen showed 1 epoch is worse), augmentation hide + weather + hflip, EMA over about the last 20% of steps. Saves `k12_15fps_aug_full_weights.pt` + `_head.pt` (averaged) and `_final_weights.pt` + `_final_head.pt` (unaveraged), plus a summary json. Estimated 4.5 h of training; the averaging copy adds about 1.3 GB of GPU memory. To be run by the user on Kaggle; the result will be compared with 1.csv only (secondary check).
+
+## 2026-11-22 - VideoMAE v2 giant (frozen) as members
+
+- Model `OpenGVLab/VideoMAEv2-giant` (1B, self-supervised pixel-reconstruction pretraining, encoder only; the decoder weights are unused). The custom code was read and only its VisionTransformer part is run from a local copy (`scripts/extract_videomaev2.py`), so the easydict package is not needed and nothing was installed. All 30 frames go in as one clip (15 time steps; the sine-cosine position table is built for 30 frames, the model was pretrained with 16), 224x224 squashed, ImageNet normalisation, test format for train frames, fp16, fused attention (same maths). Output per clip 15 per-time-step mean-patch vectors (after the final LayerNorm) + their mean (16 x 1408), saved in `cache/videomaev2_g_224_30/`. 1.58 clips/s, 1 h 24 min total.
+- Members built like the LeVJEPA ones (5 folds by subject, held-out train only), AUC / F1: V1 LR + pose 0.7452 / 0.6679 (without pose 0.6235 F1); V5 transformer 0.7698 / 0.6912; V5 BiGRU 0.7365 / 0.6639. For comparison D1 0.8539 / 0.7381, E5 transformer 0.8784 / 0.7705.
+- Blend check (v2 = 0.9225 / 0.8265): v2 + V1 x1 0.9157 / 0.8162 (x2: 0.9052 / 0.8055); v2 + V5 transformer x1 0.9141 / 0.8142 (x2: 0.9037 / 0.8019). Every addition makes the blend worse.
+- Conclusion: pixel-reconstruction features are far weaker than the DINO / JEPA features for this task (frozen features of this kind need the fine-tune to become useful) and add nothing. Not added. Caveat: the 30-frame position table is an extension of the 16-frame pretraining; a 16-frame input was not tried because the gap to LeVJEPA is large. Closed.
+
+## 2026-11-22 - Notebook requirements (from the user)
+
+- The final (submission) notebook is checked by the committee and must run from scratch: raw data, all feature extraction (DINOv3, LeVJEPA), the pose step (RT-DETR person box + ViTPose 17 keypoints), the fine-tune (to be added once the recipe is final), then the members and the blend. The main notebook (`main.ipynb`) should also get the RT-DETR + ViTPose pose step in its pipeline; today it reads the saved pose cache. Not done yet; planned after the current experiment queue.
+
+## 2026-11-22 - Stacking against the weight grid (nested, held-out train)
+
+- Question: is a logistic regression on the members' held-out scores better than the {0,1,2} weight grid? Both were fitted without peeking (scratchpad `stack.py`): for each of the 5 per-video folds, the weights or the stacker AND the threshold are chosen on the other 4 folds' held-out member scores and scored on this fold; pooled over the 5 folds. Members: B (old B, B12_ft_pose), E3 BiGRU, E3 transformer, D1, E5 transformer (+ E5 BiGRU, V-JEPA 2 V5 transformer, V-JEPA 2.1 L V1 and V5 transformer in the 9-member version). Inputs are the ranks inside each member's own held-out predictions, as in the blend.
+- Results (AUC / F1 at the nested threshold): v2 fixed weights (2/1/1/1/1, picked earlier on all folds, so optimistic) 0.9225 / 0.8265; weight grid {0,1,2}, nested 0.9194 / 0.8180; logistic regression on the logit of the ranks 0.9182 to 0.9187 / 0.8046 to 0.8071 (C 0.01 to 10; 9 members 0.8051 to 0.8081); logistic regression on the raw ranks 0.9213 / 0.8163. Stacker coefficients on all data: B 0.59, E3 BiGRU 0.20, E3 transformer 0.19, D1 0.40, E5 transformer 0.40 (the same order as the weights 2/1/1/1/1).
+- Conclusions: (1) stacking is not better than the weight grid (0.805 to 0.816 against 0.818); the grid stays. (2) The honest held-out F1 of the v2 blend is about 0.818, not 0.8265: the earlier number was optimistic by about 0.008 because the weights were chosen on the same data. This is also the size of the noise when comparing blends. (3) Adding more members to the stacker (9 members) changed nothing.
+
+## 2026-11-22 - Can better blend weights be found? (nested test)
+
+- Same nested setup as the stacking test (weights and threshold chosen on 4 folds, scored on the fifth, pooled; scratchpad `tune_w.py`), members B (old B), E3 BiGRU, E3 transformer, D1, E5 transformer. AUC / F1: grid {0,1,2} chosen by F1 (the current way) 0.9194 / 0.8180; grid {0,1,2} chosen by AUC 0.9246 / 0.8203; grid {0,..,4} by AUC 0.9230 / 0.8158; grid {0,1,2} by AUC with 7 members (+E5 BiGRU, V-JEPA 2 transformer) 0.9230 / 0.8159; smooth weights from an optimiser, 5 members 0.9225 / 0.8205, 9 members 0.9221 / 0.8146; equal weights, 5 members 0.9219 / 0.8211.
+- Conclusion: every way of choosing weights lands between 0.815 and 0.821 F1 and 0.919 to 0.925 AUC; equal weights are as good as the tuned ones. The weights are not where the gain is; keep 2/1/1/1/1 (B x2). Improvement has to come from better or more different members (a better B), not from reweighting.
+
+## 2026-11-22 - V-JEPA 2.1 ViT-g (1B, frozen) as members
+
+- Features: `vjepa2_1_vitg_384.pt` (target_encoder; all keys matched), same recipe as the ViT-L (30 frames as one clip, 256 px, 15 time steps, 16 x 1408 per clip, `scripts/extract_vjepa21.py` with SIZE=g, 1.64 to 1.8 clips/s, 1 h 29 min for test + train, saved in `cache/vjepa21_g_256_30/`). Members built like the LeVJEPA ones (5 folds by subject, held-out train only; scripts `v1_vjepa21.py`, `v5_vjepa21.py` in the scratchpad).
+- Members alone (AUC / F1): V1 LR + pose 0.8458 / 0.7433; V5 transformer 0.8804 / 0.7700; V5 BiGRU 0.8874 / 0.7819. For comparison: D1 0.8539 / 0.7381, E5 transformer 0.8784 / 0.7705, E5 BiGRU 0.8695 / 0.7521, V-JEPA 2.1 ViT-L transformer 0.8612 / 0.7556. The ViT-g BiGRU is the best frozen member so far (+0.009 AUC, +0.011 F1 over E5 transformer).
+- Blend check (v2 = 0.9225 / 0.8265; weights not nested, as in the earlier checks): v2 + V5 BiGRU x1 0.9260 / 0.8260 (x2: 0.9265 / 0.8252); v2 + V5 transformer x1 0.9243 / 0.8248; v2 + V1 x1 0.9235 / 0.8223; replacing D1 with the ViT-g BiGRU 0.9214 / 0.8208; replacing E5 transformer with it 0.9227 / 0.8292 (best F1, +0.0027); replacing D1 and E5 with ViT-g V5 transformer + BiGRU 0.9185 / 0.8229. Rank correlation of the ViT-g BiGRU: with E5 transformer 0.794, D1 0.749, B 0.578 (so it overlaps the LeVJEPA members more than B does).
+- Nested check (weights and threshold fitted on 4 folds, scored on the fifth, scratchpad `g_nested.py`): grid {0,1,2} by AUC with the 5 old members 0.9246 / 0.8203; with the ViT-g BiGRU added (6 members) 0.9249 / 0.8227; with BiGRU + transformer (7) 0.9249 / 0.8227; equal weights over 6 members 0.9249 / 0.8172.
+- Conclusion: the 1B model is a better frozen member than LeVJEPA on its own (the user's hunch was right for the single member) but in the blend the gain is +0.0003 AUC and +0.0024 F1 in the honest nested test, inside the noise (about 0.005 to 0.008). Not adopted yet; the option is to swap E5 transformer for the ViT-g BiGRU. Cost to adopt: a 16.9 GB checkpoint and 1.5 h of extraction in the from-scratch final notebook.
+
+## 2026-11-22 - V-JEPA 2.1 ViT-g in the test blend (secondary check against 1.csv, no CSV written)
+
+- Same blend construction as the 30 fps files (`blend_k30.py` logic, scratchpad `g_test_blend.py`): B = head cheat probability over all 30 test frames, rank scale and threshold from the 15 fps fold-0 held-out predictions (1,364 clips), other members ranked inside their own held-out predictions. 1.csv is only a secondary check, not used to choose anything.
+- B = 15 fps fold-0 model: v2 (E5 transformer) fold-0 F1 0.8312 / vs 1.csv 0.8556 (170 wrong); E5 transformer replaced by the ViT-g BiGRU 0.8439 / 0.8414 (193 wrong); ViT-g BiGRU added 0.8420 / 0.8393 (197 wrong).
+- B = 30 fps full model: v2 0.8312 / 0.8496 (175 wrong); swap 0.8439 / 0.8334 (197 wrong); added 0.8420 / 0.8378 (193 wrong).
+- B = average of 15 and 30 fps: v2 0.8312 / 0.8476 (178 wrong); swap 0.8439 / 0.8433 (188 wrong); added 0.8420 / 0.8409 (192 wrong).
+- Members alone against 1.csv: ViT-g BiGRU 0.7786, E5 transformer 0.7835 (equal). The swap raises the fold-0 held-out F1 by 0.013 (the threshold is chosen on that same fold, so optimistic) but lowers the agreement with 1.csv by 0.012 to 0.016, and moves the cheat share from 0.244 to 0.273 (the 1.csv share is 0.22 by the earlier check).
+- Conclusion: the 1B model is a better frozen member on held-out train alone, but it does not improve the blend on the test side. Not adopted; E5 transformer stays. The checkpoint and features stay on disk in case the final blend is re-examined.
+
+## 2026-11-22 - Fine-tune screen: higher input resolution (288x512)
+
+- Same screen as the others (fold 0, K=12, 2 epochs, augmentation hide + weather + hflip, seed 42, held-out frames, AUC proxy), only the input size changed from 224x400 (14x25 = 350 patches) to 288x512 (18x32 = 576 patches). New frame cache `cache/ft_frames_testfmt_288x512` (test format 640x360 + JPEG q90, then resized to 512x288; `scripts/ft2_frames.py` and `scripts/ft2_train.py` now read the optional env variables `FRAMES_DIR`, `IMG_H`, `IMG_W`, defaults unchanged). Peak GPU memory 4.77 GB, 7.3 frames/s in the benchmark, screen 27 min (about 1.7x the time of 224x400). The first attempt was killed by a laptop shutdown and re-run from the start.
+- Result: AUC 0.9008, F1 0.7615 at 0.5, F1 0.827 at the best threshold (0.775). Reference at 224x400 with the same setup: 0.8866 (seed 42) and 0.8789 (seed 2). So +0.014 to +0.022 AUC, above the seed noise of about 0.008 and larger than any other single change in the recipe screens (K=8 0.8871, 1 epoch 0.8635, LR 4e-5 0.8762, LR 1e-5 0.8836, K=20 0.8788).
+- Next: repeat with seed 2 to confirm; if it holds, test an even bigger input only if memory allows (8 GB GPU). A higher resolution also changes the test side (test frames must be resized the same way), the cost of the Kaggle run (about 1.7x the steps time, so about 7 to 8 h on Kaggle's GPU, short on an A100) and every later inference (30 test frames per sequence at the new size).
+
+## 2026-11-22 - Kaggle 100% train fine-tune with augmentation and weight averaging finished (224x400)
+
+- Run by the user with `kaggle_15fps_aug/kaggle_finetune_15fps_aug_full.ipynb`: K=12, 15 fps, 2 epochs, augmentation hide + weather + hflip, EMA over about the last 20% of steps, 100% of the train videos (no held-out score), input 224x400 (the resolution test came after). Summary: 6,698 of 6,698 steps, 1.39 s per step, 2.87 h training, 3.4 h total, final loss 0.804, fp16 AMP. Files extracted (from `results (2).zip`, checked for unsafe paths first) into `cache/kaggle_15fps_aug_full/`: averaged weights + head, final (unaveraged) weights + head, summary.
+- Checks: both weight sets have 12 blocks (20 to 31), all values finite; the averaged and the final weights are almost identical (relative mean difference 0.0001 on block 31 qkv, head linear weights differ by 0.0003), so the averaging effect on predictions will be small. Test inference on all 30 frames for both: `infer_aug_full.py` (scratchpad), queued behind the seed-2 resolution check; then comparison with 1.csv (secondary check only).
+- Cache cleanup (the user approved the list): deleted `cache/vjepa2_1_download/weights` (21 GB, the V-JEPA 2.1 checkpoints, model not adopted; the Meta code in `repo/` and the extracted features stay), `cache/ft2/k16` (4.3 GB, K=16 five-fold run, not better than K=12) and `cache/dinov3_hplus_224x400_step3` (0.4 GB, the non-bf16 copy; `..._step3_bf16` stays). Free disk went from 154 GB to 179 GB. Not deleted: `cache/ft_hplus_block20` (17 GB, still used by `main.ipynb` and the old B scripts) and `cache/ft2/k12`.
+
+## 2026-11-22 - Higher input resolution, seed 2 repeat (the gain did not hold)
+
+- Same screen as above with seed 2 (288x512, K=12, 2 epochs, fold 0, hide + weather + hflip): AUC 0.8692, F1 0.7384 at 0.5, F1 0.8022 at the best threshold.
+- All four runs (AUC): 224x400 seed 42 0.8866, seed 2 0.8789 (mean 0.8828); 288x512 seed 42 0.9008, seed 2 0.8692 (mean 0.8850). The mean gain is +0.002, far below the seed spread (0.008 at 224x400, 0.032 at 288x512); at seed 2 the larger input is even 0.010 lower. The first result was mostly luck.
+- Conclusion: no reliable gain from 288x512 for the fine-tune, at 1.7x the cost. Not adopted; input stays 224x400. The frame cache `cache/ft_frames_testfmt_288x512` (6 GB) is no longer needed unless a third seed is run. For the frozen E3 the size test (stage 1 in the queue) is still open, but the fine-tune result gives no reason to expect a gain.
+
+## 2026-11-22 - Frozen A (frozen DINOv3 + logistic regression + pose) back in the blend, nested test
+
+- A members: A30_dino_pose (AUC alone 0.8155) and A_dyn_C0.003 (0.7930). Rank correlation of A30_dino_pose with B 0.683, D1 0.499, E3 BiGRU 0.556 (scratchpad `a_nested.py`, same nested setup as the stacking test; B in the held-out test is the old B because the new B has no held-out predictions).
+- Results (AUC / F1): v2 fixed 2/1/1/1/1 0.9225 / 0.8265; v2 + A30_dino_pose x1 0.9183 / 0.8162, x2 0.9116 / 0.8078; v2 + A_dyn x1 0.9188 / 0.8132, x2 0.9116 / 0.8017. Nested weight grid {0,1,2} with A as a 6th member: 0.9246 / 0.8203 (by AUC) and 0.9194 / 0.8180 (by F1), exactly the same as without A; the grid gave A weight 0 in every fold.
+- Conclusion: A does not help; every time the nested search chooses weight 0 for it, and forcing it in lowers the score. The earlier optimistic grid (0.8279 against 0.8214 next to the head-only B) came from choosing weights on the same data. A stays out of the blend. Caveat: not re-tested with the new B's own held-out predictions (none exist for a 100% train model).
+
+## 2026-11-22 - New B (Kaggle 100% train, 15 fps, augmentation, EMA) in the v2 blend, submission file 1 of the plan
+
+- Test inference of both weight sets on all 30 test frames of the 1,515 sequences (`infer_aug_full.py`, 39 min): head cheat probability averaged over the 30 frames. Mean cheat probability 0.362 (averaged weights) and 0.362 (final weights), against 0.389 for the 15 fps fold-0 model and 0.339 for the 30 fps model; correlation of the new averaged model with the 15 fps fold-0 model 0.790, with the 30 fps model 0.845, with its own final weights 0.9998 (the averaging barely changes the predictions).
+- Blend (v2 members unchanged: B x2, E3 BiGRU, E3 transformer, D1, E5 transformer x1; rank scale and threshold 0.70 from the 15 fps fold-0 held-out predictions, an assumption for a 100% train model; scratchpad `blend_new.py`). Agreement with 1.csv (secondary check, not used to choose anything), F1 / wrong rows / cheat share: B = new model averaged weights 0.8692 / 152 / 0.234; new model final weights 0.8677 / 154 / 0.235; 30 fps full 0.8496 / 175 / 0.234; average of 30 fps and new 0.8591 / 164 / 0.235; average of 15 fps fold-0, 30 fps and new 0.8581 / 166 / 0.239. Earlier files: 15 fps fold-0 alone 0.8556 / 170, average of 15 and 30 fps 0.8476 / 178.
+- File written at the user's request: `submissions/blend_v2_aug_full_ema_headonly.csv` (B = the new averaged-weights model alone, all 30 frames, head only; 1,515 rows, cheat share 0.234). Not submitted (the user submits). Public score: not yet known.
+
+## 2026-11-22 - Public score of the new B submission
+
+- `submissions/blend_v2_aug_full_ema_headonly.csv` (B = Kaggle 100% train, 15 fps, K=12, 2 epochs, hide + weather + hflip augmentation, averaged weights, head only; rest of v2 unchanged), submitted by the user as `submission_aug.csv`: public **0.8743286**, a new best (previous best 0.8627997 = average of the 15 fps fold-0 and 30 fps models, +0.0115; 15 fps fold-0 alone 0.8617276). Agreement with 1.csv had predicted it (0.8692 against 0.8476 to 0.8556 for the earlier files).
+
+## 2026-11-22 - main.ipynb updated to the current best pipeline
+
+- Change (user request, the from-scratch submission notebook comes later): the old B in `main.ipynb` (per-fold fine-tuned backbones from `ft_hplus_block20`, logistic regression on the 2-frame summaries + pose) is replaced by the current B: the Kaggle 100% train fine-tune (`kaggle_finetune_15fps_aug_full.ipynb`: K=12, 15 fps, 2 epochs, hide + weather + hflip, averaged weights), head only, mean of the 30 frames' cheat probability on every test clip (`scripts/kaggle_infer_test.py`, new in the repo, same code as the scratchpad `infer_aug_full.py`). Removed from the notebook: `FT_CACHE`, `FT_BLOCKS`, the fine-tuned feature cells, `fine_tuned_features` and `oof_ft`. Added caches `REF_CACHE` (Kaggle fold-0 run) and `B_CACHE` in the import cell.
+- Blend cells changed to match the submission that scored 0.8743286: B has held-out predictions only for fold 0 (the Kaggle fold-0 run that did not see fold 0), so all ranks use the fold-0 held-out clips as the reference, the weights are fixed at B 2 and the four other members 1 (the earlier all-fold search with the old B; a re-search gives the same within noise), and the threshold is chosen on the fold-0 clips (0.70 in the submission). The other four members (BiGRU DINOv3, Transformer DINOv3, LeVJEPA + pose, Transformer LeVJEPA) are unchanged. Output still `submissions/main.csv`.
+- Check: the notebook was NOT run (the user did not want it run, only updated; a started run was stopped; it is untested end to end, so run it once before relying on it). `main.ipynb` still reads caches built by the scripts; the from-scratch version (all extraction, RT-DETR, ViTPose, fine-tune in the notebook) is the later submission notebook.
+- E3 with augmented frozen features, queued: `extract_dino_aug.py` (one augmented copy of every train clip through the frozen DINOv3, 2.6 h, running), then E3a BiGRU/transformer trained on the originals plus the copies, a control E3c (originals only, 50 epochs, because the copies double the number of steps), and the blend check (no 1.csv used).
+- 2026-11-22 (later): the augmented extraction was stopped by the user's request after 15 of 398 videos (resumable; `COPY=1 python scripts/extract_dino_aug.py` from leon/ continues where it stopped); the E3 augmentation chain is postponed to the next day.
+- 2026-11-22 (later): cache cleanup approved by the user ("delete the unused big caches"): deleted `cache/ft_hplus_block20/train_tokens.npy` (13 GB) and `test_tokens.npy` (2.6 GB), the frozen block-1-to-20 tokens of the old B (only the old scripts `ft_cache.py` / `ft_train.py` used them; `main.ipynb` no longer does; the small `train_meta.csv` and `preds` folders stay), and `cache/ft_frames_testfmt_288x512` (6 GB, the 288x512 frame cache of the closed resolution idea). The old B fine-tune cannot be re-run without rebuilding the tokens with `ft_cache.py`. Left alone: `cache/ft2/k12` (5.5 GB, the 5-fold ft2 K=12 run), `cache/ft_frames_testfmt` (3.6 GB, needed by `ft2_train.py`) and the small feature folders.
+- 2026-11-22 (later): the user decided to keep using `submissions/1.csv` as the secondary agreement check (see the rules discussion above); it stays out of `main.ipynb` and the final notebook and is never used to choose pipeline values.
+
+## 2026-11-22 - E3 on augmented frozen DINOv3 features (E3a): no gain
+
+- Setup: `scripts/extract_dino_aug.py` made one augmented copy (hide + weather + hflip, the same random draw on all 30 frames of a clip, test delivery format, 224x400) of every labelled train clip through the frozen DINOv3 ViT-H+ (2560 per frame, `cache/dinov3_aug1_224x400`, 398 videos, 17 frames/s, about 2.7 h with a stop in the middle). E3a = BiGRU and transformer trained on the originals plus the copies of the training-fold clips only (the held-out fold is never augmented or used). Control E3c = originals only, 50 epochs (same number of steps as E3a roughly). Test frames stay unaugmented.
+- Alone, 5 folds by subject, held-out clips (AUC / best F1): E3 BiGRU 0.8516 / 0.7729, E3a BiGRU 0.8581 / 0.7842, E3c BiGRU 0.8550 / 0.7688; E3 transformer 0.8574 / 0.7741, E3a transformer 0.8540 / 0.7728, E3c transformer 0.8546 / 0.7664.
+- Blend v2 (AUC / best F1): plain E3 0.9225 / 0.8265; E3a instead of E3 0.9223 / 0.8239; E3a added as two extra members 0.9189 / 0.8176; E3c instead of E3 0.9231 / 0.8254; E3c added 0.9184 / 0.8176.
+- Conclusion: no gain. The only visible effect is the BiGRU (+0.012 F1 over E3, but E3c is also +0.0034 AUC over E3, so part of it is just more training steps), and it disappears in the blend (-0.0026 F1, inside the noise of 0.005 to 0.008). The frozen sequence heads do not profit from augmented features, so submission 2 (frozen augmented members) is not worth making. Not adopted. Kept: `cache/dinov3_aug1_224x400` (small) in case frozen A is re-tested with it.
+
