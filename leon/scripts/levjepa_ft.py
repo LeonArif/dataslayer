@@ -26,7 +26,8 @@ FOLD = os.environ.get("FOLD", "0"); BS = int(os.environ.get("BS", 8))
 AUG = os.environ.get("AUG", "hide+weather+hflip"); OPS = ft2_augs.parse(AUG)
 EMA_FRAC = float(os.environ.get("EMA_FRAC", 0.2)); LR_BLOCKS, LR_HEAD, WD = float(os.environ.get("LR_BLOCKS", 2e-5)), float(os.environ.get("LR_HEAD", 1e-3)), 0.05
 TSEED, BENCH, CHECK, NOTEST = int(os.environ.get("TSEED", 42)), int(os.environ.get("BENCH", 0)), int(os.environ.get("CHECK", 0)), int(os.environ.get("NOTEST", 0))
-RUN = os.environ.get("FT_OUT", f"k{K}_f{FOLD}_aug"); OUT = ROOT / "cache/levjepa_ft" / RUN; OUT.mkdir(parents=True, exist_ok=True)
+HEAD = os.environ.get("HEAD", "lr")                       # lr = linear on [cls, mean patch]; gru / tf = BiGRU / transformer over the 15 per-frame mean-patch vectors
+RUN = os.environ.get("FT_OUT", f"k{K}_f{FOLD}_{HEAD}_aug"); OUT = ROOT / "cache/levjepa_ft" / RUN; OUT.mkdir(parents=True, exist_ok=True)
 DEVICE, DEPTH, T, HP = "cuda", 24, 15, 14
 CHEAT = ["Looking_Under_the_Desk", "Reading_Hidden_Notes", "Repeated_Peeking", "Using_Smartwatch"]
 ACTIONS = CHEAT + ["Checking_Smartwatch", "Looking_Around", "Thinking", "Writing_Answers"]; WRITE = 7
@@ -70,12 +71,33 @@ def to_input(arr, seeds=None):                      # arr (b, 15, 224, 224, 3) u
     return ((x - MEAN) / STD).permute(0, 2, 1, 3, 4).contiguous()
 
 
+class LRHead(nn.Module):
+    def __init__(s):
+        super().__init__(); s.net = nn.Sequential(nn.BatchNorm1d(2 * 1024, affine=False), nn.Dropout(0.2), nn.Linear(2 * 1024, len(ACTIONS)))
+
+    def forward(s, cls, pf): return s.net(torch.cat([cls, pf.mean(1)], 1))
+
+
+class SeqHead(nn.Module):                               # the E5 recipe inside the model: per-frame vectors, centred on the clip mean, small BiGRU / transformer
+    def __init__(s, kind, d=256):
+        super().__init__(); s.kind = kind
+        s.inp = nn.Sequential(nn.LayerNorm(2 * 1024), nn.Dropout(0.2), nn.Linear(2 * 1024, d))
+        if kind == "gru": s.seq = nn.GRU(d, d // 2, batch_first=True, bidirectional=True)
+        else: s.pos = nn.Parameter(torch.zeros(1, T, d)); s.seq = nn.TransformerEncoder(nn.TransformerEncoderLayer(d, 4, 2 * d, 0.2, batch_first=True, norm_first=True), 2)
+        s.out = nn.Sequential(nn.LayerNorm(d), nn.Dropout(0.2), nn.Linear(d, len(ACTIONS)))
+
+    def forward(s, cls, pf):
+        m = pf.mean(1, keepdim=True); x = s.inp(torch.cat([pf - m, m.expand_as(pf)], 2))
+        x = s.seq(x)[0] if s.kind == "gru" else s.seq(x + s.pos)
+        return s.out(x.mean(1))
+
+
 class Net(nn.Module):
     def __init__(self, enc, k):
         super().__init__()
         self.enc, self.nfrozen = enc, DEPTH - k
         self.train_blocks = nn.ModuleList(enc.blocks[self.nfrozen:])
-        self.head = nn.Sequential(nn.BatchNorm1d(2 * 1024, affine=False), nn.Dropout(0.2), nn.Linear(2 * 1024, len(ACTIONS)))
+        self.head = LRHead() if HEAD == "lr" else SeqHead(HEAD)
         for p in enc.parameters(): p.requires_grad_(False)
         for p in list(self.train_blocks.parameters()) + list(enc.norm.parameters()): p.requires_grad_(True)
         for b in enc.blocks[:self.nfrozen]: b.to(torch.bfloat16)
@@ -95,8 +117,9 @@ class Net(nn.Module):
             for b in self.train_blocks:
                 t = checkpoint(b, t, use_reentrant=False, **kw) if self.training else b(t, **kw)
             t = enc.norm(t)
-            f = torch.cat([t[:, 0], t[:, 1:].mean(1)], 1)
-        return (self.head(f.float()), f.float()) if feats else self.head(f.float())
+        cls, pf = t[:, 0].float(), t[:, 1:].float().reshape(t.shape[0], T, HP * HP, -1).mean(2)
+        out = self.head(cls, pf)
+        return (out, torch.cat([cls, pf.mean(1)], 1)) if feats else out
 
 
 hf = AutoModel.from_pretrained("galilai-group/LeVJEPA-1.5-Large", trust_remote_code=True)

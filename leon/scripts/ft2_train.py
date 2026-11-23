@@ -52,9 +52,16 @@ meta = pd.read_csv(FR / "train_meta.csv").merge(train[["video", "fold", "action_
 assert meta["fold"].notna().all() and (meta["row"].values == np.arange(len(meta))).all()
 
 
+NEWLAB = int(os.environ.get("NEWLAB", 0))        # 1 = cheat videos labelled per second from leon/annotation/clip_labels_ai.csv (cheat = the video's action, normal = writing, unsure = not trained on); other videos as before
+if NEWLAB:
+    _nl = pd.read_csv(ROOT / "leon/annotation/clip_labels_ai.csv"); _lab = {(v, s): l for v, s, l in zip(_nl.video, _nl.second, _nl.label_new)}
+
+
 def frame_labels(df):
     lab = np.full(len(df), -1)
-    for i, (a, s, t) in enumerate(zip(df.action_id, df.start, df.sec)):
+    for i, (v, a, s, t, fr) in enumerate(zip(df.video, df.action_id, df.start, df.sec, df.frame)):
+        if NEWLAB and v.startswith("cheat/") and (v, int(fr) // 30) in _lab:
+            l = _lab[(v, int(fr) // 30)]; lab[i] = a if l == 1 else (WRITE if l == 0 else -1); continue
         if a == WRITE:
             lab[i] = WRITE
         elif not np.isnan(s):
