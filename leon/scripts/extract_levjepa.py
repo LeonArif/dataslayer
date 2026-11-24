@@ -9,10 +9,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import cv2, numpy as np, pandas as pd, torch
 from transformers import AutoModel
-ROOT = Path(__file__).resolve().parents[2]; DATA = ROOT / "data"; OUT = ROOT / "cache/levjepa_large_224_30"
+ROOT = Path(__file__).resolve().parents[2]; DATA = ROOT / "data"; OUT = ROOT / os.environ.get("OUT_DIR", "cache/levjepa_large_224_30")      # env OUT_DIR / MODEL: the other pretrain, e.g. MODEL=galilai-group/LeVJEPA-VideoMix-Large OUT_DIR=cache/levjepa_videomix_224_30
 (OUT / "train").mkdir(parents=True, exist_ok=True); (OUT / "test_parts").mkdir(exist_ok=True)
 cv2.setNumThreads(2)
-model = AutoModel.from_pretrained("galilai-group/LeVJEPA-1.5-Large", trust_remote_code=True).half().cuda().eval()
+model = AutoModel.from_pretrained(os.environ.get("MODEL", "galilai-group/LeVJEPA-1.5-Large"), trust_remote_code=True).half().cuda().eval()      # default attn_mode block_causal is what the weights were trained with, never change it
 MEAN = torch.tensor([0.485, 0.456, 0.406], device="cuda").view(1, 3, 1, 1, 1) * 255
 STD = torch.tensor([0.229, 0.224, 0.225], device="cuda").view(1, 3, 1, 1, 1) * 255
 
