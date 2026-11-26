@@ -8,8 +8,10 @@ import cv2, numpy as np, pandas as pd, timm, torch
 
 ROOT = Path(__file__).resolve().parents[2]
 DIR = ROOT / os.environ.get("DIR", "cache/kaggle_15fps_aug_full"); TAG = os.environ.get("TAG", "k12_15fps_aug_full")
-K, IMG_HW, DEVICE, CHUNK = 12, (int(os.environ.get("IMG_H", 224)), int(os.environ.get("IMG_W", 400))), "cuda", 32
+K, IMG_HW, DEVICE, CHUNK = int(os.environ.get("K", 12)), (int(os.environ.get("IMG_H", 224)), int(os.environ.get("IMG_W", 400))), "cuda", 32
 VARIANTS = {"ema": (f"{TAG}_weights.pt", f"{TAG}_head.pt"), "final": (f"{TAG}_final_weights.pt", f"{TAG}_final_head.pt")}
+VARIANTS = {v: f for v, f in VARIANTS.items() if (DIR / f[0]).exists() and (DIR / f[1]).exists()}      # env K = trained blocks (20 for the K=20 run); a variant whose files were not downloaded is skipped (only the EMA files are needed)
+assert "ema" in VARIANTS, "the EMA weights and head files are missing"
 PARTS = DIR / "test_parts"; PARTS.mkdir(exist_ok=True)
 cv2.setNumThreads(2)
 base = timm.create_model("vit_huge_plus_patch16_dinov3.lvd1689m", pretrained=True, num_classes=0, img_size=IMG_HW).to(DEVICE).eval()

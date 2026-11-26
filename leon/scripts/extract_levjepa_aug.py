@@ -16,12 +16,12 @@ import ft2_augs
 ROOT = Path(__file__).resolve().parents[2]
 COPY, AUG, LIMIT = int(os.environ.get("COPY", 1)), os.environ.get("AUG", "hide+weather"), int(os.environ.get("LIMIT", 0))
 OPS = ft2_augs.parse(AUG)
-OUT = ROOT / f"cache/levjepa_aug{COPY}_224_30"; OUT.mkdir(parents=True, exist_ok=True)
+OUT = ROOT / os.environ.get("OUT_DIR", f"cache/levjepa_aug{COPY}_224_30"); OUT.mkdir(parents=True, exist_ok=True)      # env OUT_DIR / MODEL for the other pretrain (same per-clip augmentation draws)
 FR = np.load(ROOT / "cache/levjepa_clips/train_clips.npy", mmap_mode="r"); n = len(FR)
 path = OUT / "train.npy"
 mm = np.lib.format.open_memmap(path, mode="r+" if path.exists() else "w+", dtype=np.float16, shape=(n, 32, 1024))
 done_f = OUT / "done.txt"; start = int(done_f.read_text()) if done_f.exists() else 0
-model = AutoModel.from_pretrained("galilai-group/LeVJEPA-1.5-Large", trust_remote_code=True).half().cuda().eval()
+model = AutoModel.from_pretrained(os.environ.get("MODEL", "galilai-group/LeVJEPA-1.5-Large"), trust_remote_code=True).half().cuda().eval()      # keep the default block_causal attention
 MEAN = torch.tensor([0.485, 0.456, 0.406], device="cuda").view(1, 3, 1, 1); STD = torch.tensor([0.229, 0.224, 0.225], device="cuda").view(1, 3, 1, 1)
 print("augmentation", OPS, "| copy", COPY, "| clips", n, "| start at", start, flush=True)
 

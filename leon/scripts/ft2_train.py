@@ -54,7 +54,7 @@ assert meta["fold"].notna().all() and (meta["row"].values == np.arange(len(meta)
 
 NEWLAB = int(os.environ.get("NEWLAB", 0))        # 1 = cheat videos labelled per second from leon/annotation/clip_labels_ai.csv (cheat = the video's action, normal = writing, unsure = not trained on); other videos as before
 if NEWLAB:
-    _nl = pd.read_csv(ROOT / "leon/annotation/clip_labels_ai.csv"); _lab = {(v, s): l for v, s, l in zip(_nl.video, _nl.second, _nl.label_new)}
+    _nl = pd.read_csv(ROOT / os.environ.get("LABFILE", "leon/annotation/clip_labels_ai.csv")); _lab = {(v, s): l for v, s, l in zip(_nl.video, _nl.second, _nl.label_new)}
 
 
 def frame_labels(df):
@@ -73,6 +73,26 @@ def frame_labels(df):
 
 lab = frame_labels(meta)
 meta["y"] = lab
+# AUXW = w (0 = off): auxiliary regression head "time since the action started" on the cheat frames, target min(t - start, 10) / 10 (start = the by-eye start, side view + 0.5), loss weight w; not used for prediction.
+# The idea: late cheat frames look like writing, the extra target asks the features to carry how far into the action the frame is. Needs the by-eye start, so it is not combined with ALLFRAMES.
+AUXW = float(os.environ.get("AUXW", 0))
+if AUXW > 0:
+    assert not int(os.environ.get("ALLFRAMES", 0)) and not NEWLAB
+    _tau = np.clip((meta["sec"].values - meta["start"].values) / 10.0, 0, 1); _am = (meta["y"].values >= 0) & (meta["y"].values != WRITE) & np.isfinite(meta["start"].values)
+    TAU, TAU_M = torch.tensor(np.nan_to_num(_tau), dtype=torch.float32, device=DEVICE), torch.tensor(_am, device=DEVICE)
+    print(f"AUXW {AUXW}: {int(_am.sum())} cheat frames get the time-since-start target, mean {float(_tau[_am].mean()):.3f}", flush=True)
+# SOFT = p (0 = off): soft targets for the clips the old rule calls cheat but the per-second labels call normal (they look like ordinary writing): target (1 - p) x the video's cheat action + p x Writing_Answers; everything else keeps its hard old label.
+# The training labels stay the old ones (NEWLAB must be 0), the per-second labels only soften the ambiguous cheat frames. Not combined with ALL.
+SOFT = float(os.environ.get("SOFT", 0))
+SOFT_TAB = None
+if SOFT > 0:
+    assert not NEWLAB and not ALL
+    _nl = pd.read_csv(ROOT / os.environ.get("LABFILE", "leon/annotation/clip_labels_ai.csv")); _sl = {(v, s): l for v, s, l in zip(_nl.video, _nl.second, _nl.label_new)}
+    _tab = np.eye(len(ACTIONS), dtype=np.float32)[np.where(lab >= 0, lab, WRITE)]; _amb = 0
+    for i, (v, fr) in enumerate(zip(meta.video, meta.frame)):
+        if lab[i] >= 0 and lab[i] != WRITE and v.startswith("cheat/") and _sl.get((v, int(fr) // 30), 1) == 0:
+            _tab[i] = 0; _tab[i, lab[i]] = 1 - SOFT; _tab[i, WRITE] = SOFT; _amb += 1
+    SOFT_TAB = torch.tensor(_tab, device=DEVICE); print(f"SOFT {SOFT}: {_amb} of {int((lab >= 0).sum())} labelled frames get the soft target", flush=True)
 if ALL:
     meta_all = pd.read_csv(FR / "train_meta_all.csv").merge(train[["video", "fold", "action_id", "start"]], on="video", how="left")
     assert meta_all["fold"].notna().all()
@@ -83,10 +103,10 @@ if ALL:
 FRAMES = np.load(FR / "train_frames.npy", mmap_mode="r")
 print("frames", len(meta), "labelled", (lab >= 0).sum(), "per class", np.bincount(lab[lab >= 0], minlength=8), flush=True)
 
-MODEL = "vit_huge_plus_patch16_dinov3.lvd1689m"
+MODEL = os.environ.get("MODEL", "vit_huge_plus_patch16_dinov3.lvd1689m")      # env MODEL: another timm ViT of the same Eva class, e.g. eva02_large_patch14_224.mim_m38m with IMG_H=224 IMG_W=392 (multiples of 14) and its own FRAMES_DIR
 _probe = timm.create_model(MODEL, pretrained=False, num_classes=0, img_size=IMG_HW)
 MEAN = torch.tensor(_probe.pretrained_cfg["mean"], device=DEVICE).view(1, 3, 1, 1); STD = torch.tensor(_probe.pretrained_cfg["std"], device=DEVICE).view(1, 3, 1, 1)
-EMBED, NPRE = _probe.embed_dim, _probe.num_prefix_tokens
+EMBED, NPRE, NBLK = _probe.embed_dim, _probe.num_prefix_tokens, len(_probe.blocks)
 del _probe
 
 
@@ -102,9 +122,10 @@ def batch_images(idx):
 class Net(nn.Module):
     def __init__(self, base, k):
         super().__init__()
-        self.base, self.nfrozen = base, 32 - k
+        self.base, self.nfrozen = base, NBLK - k
         self.train_blocks = nn.ModuleList(base.blocks[self.nfrozen:])
         self.head = nn.Sequential(nn.BatchNorm1d(2 * EMBED, affine=False), nn.Dropout(0.2), nn.Linear(2 * EMBED, len(ACTIONS)))
+        self.aux = nn.Sequential(nn.Dropout(0.2), nn.Linear(2 * EMBED, 1)); self.last_f = None
         for p in base.parameters(): p.requires_grad_(False)
         for p in list(self.train_blocks.parameters()) + list(base.norm.parameters()): p.requires_grad_(True)
         for b in base.blocks[:self.nfrozen]: b.to(torch.bfloat16)
@@ -121,6 +142,7 @@ class Net(nn.Module):
                 t = checkpoint(b, t, rope=rope, use_reentrant=False) if self.training else b(t, rope=rope)
             t = base.norm(t)
             f = torch.cat([t[:, 0], t[:, NPRE:].mean(1)], 1)
+        self.last_f = f.float()
         return (self.head(f.float()), f.float()) if feats else self.head(f.float())
 
 
@@ -144,12 +166,12 @@ for fold in FOLDS:
     blocks_params = list(m.train_blocks.parameters()) + list(base.norm.parameters())
     n_train = sum(p.numel() for p in blocks_params)
     print(f"K={K} fold={fold} trainable block params {n_train / 1e6:.1f}M | aug {OPS}", flush=True)
-    assert n_train > K * 20e6
+    assert n_train > K * 10e6
     opts = {p: bnb.optim.AdamW8bit([p], lr=LR_BLOCKS, weight_decay=WD) for p in blocks_params}
     def hook(p):
         opts[p].step(); opts[p].zero_grad(set_to_none=True)
     handles = [p.register_post_accumulate_grad_hook(hook) for p in blocks_params]
-    head_opt = torch.optim.AdamW(m.head.parameters(), lr=LR_HEAD, weight_decay=WD)
+    head_opt = torch.optim.AdamW(list(m.head.parameters()) + (list(m.aux.parameters()) if AUXW > 0 else []), lr=LR_HEAD, weight_decay=WD)
     scale = {p: LLRD ** (K - 1 - i) for i, b in enumerate(m.train_blocks) for p in b.parameters()}; scale.update({p: 1.0 for p in base.norm.parameters()})
     ema_params = blocks_params + list(m.head.parameters()); ema = [p.detach().clone().float() for p in ema_params] if EMA_FRAC > 0 else None
 
@@ -186,10 +208,14 @@ for fold in FOLDS:
             head_opt.param_groups[0]["lr"] = LR_HEAD * f
             yb = y_all[torch.from_numpy(b).to(DEVICE)]; ysoft = None
             if OPS:
-                xb, ysoft = ft2_augs.augment(fetch(b), F.one_hot(yb, len(ACTIONS)).float(), OPS); xb = (xb - MEAN) / STD
+                xb, ysoft = ft2_augs.augment(fetch(b), F.one_hot(yb, len(ACTIONS)).float() if SOFT_TAB is None else SOFT_TAB[torch.from_numpy(b).to(DEVICE)], OPS); xb = (xb - MEAN) / STD
             else:
                 xb = (fetch(b) - MEAN) / STD
+                if SOFT_TAB is not None: ysoft = SOFT_TAB[torch.from_numpy(b).to(DEVICE)]
             loss = F.cross_entropy(m(xb), yb if ysoft is None else ysoft, weight=w, label_smoothing=0.1)
+            if AUXW > 0:
+                bt = torch.from_numpy(b).to(DEVICE); mk = TAU_M[bt]
+                if mk.any(): loss = loss + AUXW * F.mse_loss(torch.sigmoid(m.aux(m.last_f[mk]).squeeze(1)), TAU[bt][mk])
             head_opt.zero_grad(set_to_none=True); loss.backward(); head_opt.step()
             step += 1; tot += loss.item() * len(b)
             if ema is not None:
@@ -221,7 +247,7 @@ for fold in FOLDS:
         del m, base, opts, head_opt; torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats()
         continue
     np.save(OUT / f"k{K}_f{fold}_feat_train.npy", fe_all); np.save(OUT / f"k{K}_f{fold}_val.npy", np.c_[va, pv])
-    torch.save({"K": K, "blocks": {32 - K + i: {k: v.half().cpu() for k, v in b.state_dict().items()} for i, b in enumerate(m.train_blocks)},
+    torch.save({"K": K, "blocks": {NBLK - K + i: {k: v.half().cpu() for k, v in b.state_dict().items()} for i, b in enumerate(m.train_blocks)},
                 "norm": {k: v.half().cpu() for k, v in base.norm.state_dict().items()}}, OUT / f"k{K}_f{fold}_weights.pt")
     del m, base, opts, head_opt; torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats()
 print("done")
