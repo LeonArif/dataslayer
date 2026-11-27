@@ -84,6 +84,7 @@ if AUXW > 0:
 # SOFT = p (0 = off): soft targets for the clips the old rule calls cheat but the per-second labels call normal (they look like ordinary writing): target (1 - p) x the video's cheat action + p x Writing_Answers; everything else keeps its hard old label.
 # The training labels stay the old ones (NEWLAB must be 0), the per-second labels only soften the ambiguous cheat frames. Not combined with ALL.
 SOFT = float(os.environ.get("SOFT", 0))
+PEEKW = float(os.environ.get("PEEKW", 1))
 SOFT_TAB = None
 if SOFT > 0:
     assert not NEWLAB and not ALL
@@ -192,6 +193,7 @@ for fold in FOLDS:
         cnt = np.bincount(meta.y.values[tr_act], minlength=8); cnt[WRITE] = n_write; n_epoch = len(tr_act) + n_write
         fetch = raw_images
     w = torch.tensor((cnt.sum() / (8 * cnt)) ** 0.5, dtype=torch.float32, device=DEVICE)
+    w[ACTIONS.index("Repeated_Peeking")] *= PEEKW           # PEEKW = extra loss weight of the Repeated_Peeking class (1 = off)
     steps = EPOCHS * math.ceil(n_epoch / BS); warm = max(1, steps // 20)
     lr_at = lambda s: min(1, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(1, s / steps)))
     t0, step = time.time(), 0
